@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react'
 
 const TABS = ['Overview', 'Orders', 'Webhook Events', 'Bundles', 'Replay']
+const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
 async function get(path) {
-  const r = await fetch('/api' + path)
+  const r = await fetch(API_BASE + path)
   if (!r.ok) throw new Error(`${r.status} ${path}`)
   const j = await r.json()
   return j.data
@@ -49,7 +50,7 @@ export default function App() {
   async function replay() {
     setReplayMsg('mengirim…')
     try {
-      const r = await fetch('/api/v1/open/catalog/push', { method: 'POST' })
+      const r = await fetch(API_BASE + '/v1/open/catalog/push', { method: 'POST' })
       const j = await r.json()
       setReplayMsg(`${j.data.products} produk terkirim (upstream ${j.data.upstream_status})`)
     } catch (e) {

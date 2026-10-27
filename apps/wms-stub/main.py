@@ -340,6 +340,13 @@ def admin_bundles():
     return envelope(out)
 
 
+# serve osr-admin build (kalau sudah di-build) — satu URL untuk API + panel admin
+ADMIN_DIST = os.path.join(BASE, "apps", "admin", "dist")
+if os.path.isdir(ADMIN_DIST):
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/", StaticFiles(directory=ADMIN_DIST, html=True), name="admin-ui")
+
+
 @app.on_event("startup")
 def auto_push_catalog():
     try:
