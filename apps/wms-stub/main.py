@@ -14,6 +14,7 @@ Run:  uvicorn main:app --host 0.0.0.0 --port 8100
 """
 import json, os, sqlite3, time
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import httpx
 
@@ -37,6 +38,12 @@ STATUS_ENUM_MAP = {
 }
 
 app = FastAPI(title="osr-wms-stub (ERP Perpack tiruan)")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 def q(sql, args=()):
