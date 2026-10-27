@@ -1,0 +1,14 @@
+[
+  {"name": "Sanctum Eau de Parfum", "gender": "MEN", "base_price": 89000, "sizes": ["20ml", "50ml", "100ml"]},
+  {"name": "Noctis Eau de Parfum", "gender": "MEN", "base_price": 89000, "sizes": ["20ml", "50ml", "100ml"]},
+  {"name": "Boujee Fluff Eau de Parfum", "gender": "WOMEN", "base_price": 129000, "sizes": ["20ml", "50ml", "100ml"]},
+  {"name": "Hair & Body Mist Solace", "gender": "UNISEX", "base_price": 69000, "sizes": ["100ml"]},
+  {"name": "Hair & Body Mist Serenity", "gender": "UNISEX", "base_price": 69000, "sizes": ["100ml"]},
+  {"name": "Numayr Eau de Parfum (Kadam Sidik)", "gender": "UNISEX", "base_price": 99000, "sizes": ["20ml", "50ml"]},
+  {"name": "Arwa Liliya Eau de Parfum (Kadam Sidik)", "gender": "UNISEX", "base_price": 99000, "sizes": ["20ml", "50ml"]},
+  {"name": "1M Lucky Eau de Parfum", "gender": "UNISEX", "base_price": 119000, "sizes": ["20ml", "100ml"]},
+  {"name": "Queen of Maroco Eau de Parfum", "gender": "WOMEN", "base_price": 119000, "sizes": ["20ml", "100ml"]},
+  {"name": "New Launching Eau de Parfum", "gender": "UNISEX", "base_price": 34000, "sizes": ["20ml"]},
+  {"name": "Bundling 2 Hair & Body Mist Serenity + Solace", "gender": "UNISEX", "base_price": 129000, "sizes": ["100ml x2"]},
+  {"name": "Bundle Set Numayr & Arwa Liliya", "gender": "UNISEX", "base_price": 189000, "sizes": ["20ml x2"]}
+]
