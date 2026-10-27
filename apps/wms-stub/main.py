@@ -1,56 +1,73 @@
 # -*- coding: utf-8 -*-
-"""osr-wms-stub — ERP Perpack (tiruan). Jalur A (Katalog) + Jalur B (Order & Status).
+"""ERP/WMS Simulator (Perpack) — blueprint v2.
 
-Backend memakai endpoint WEBHOOK sebagai jembatan data ke storefront:
-  * Jalur A: outbound catalog.updated  (push)
-  * Jalur B: outbound order.status_updated (baseline: body kosong = cacat SoW)
+FastAPI Data-Bridge server side: BOM/Virtual Kitting engine (Modul A),
+Zero-Click order lifecycle (Modul B), outbound webhook ber-tanda tangan
+HMAC-SHA256 (Modul C).
 
-Target webhook (storefront/core) dikonfigurasi lewat env:
-  CORE_WEBHOOK_URL      (default http://localhost:8000/webhook/octarine-wms)
-  WEBHOOK_TOKEN         (default osr-local-token-2026)
-  OSR_MODE              baseline | tobe   (default baseline)
+API v2:
+  GET  /api/v1/inventory/{sku}                     -> stok hasil kalkulasi BOM
+  POST /api/v1/storefront/checkout                 -> potong stok atomik + Zero-Click
+  POST /api/v1/wms/orders/{order_ref}/transition   -> transisi status fulfillment
+  GET  /api/v1/audit/webhook-logs                  -> log webhook outbound + signature
 
-Run:  uvicorn main:app --host 0.0.0.0 --port 8100
+Envelope: {"code":200, "msg":{...}, "data":...}
 """
-import json, os, sqlite3, time
-from fastapi import FastAPI, HTTPException
+import hashlib
+import hmac as hm
+import json
+import os
+import sqlite3
+import time
+
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
+
 import httpx
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WMS_DB = os.path.join(BASE, "db", "wms.db")
-CORE_WEBHOOK_URL = os.environ.get("OSR_WEBHOOK_URL",
-    os.environ.get("CORE_WEBHOOK_URL", "http://127.0.0.1:3000/api/webhooks/wms"))
-WEBHOOK_TOKEN = os.environ.get("OSR_WEBHOOK_TOKEN",
-    os.environ.get("WEBHOOK_TOKEN", "osr-local-token-2026"))
+
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", os.environ.get("OSR_WEBHOOK_URL", "http://127.0.0.1:3000/api/webhooks/wms"))
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", os.environ.get("OSR_WEBHOOK_HMAC_SECRET", "osr-local-hmac-secret"))
 OSR_MODE = os.environ.get("OSR_MODE", "baseline")
+ZERO_CLICK_SLA_SEC = 5.0
 
 STATUS_FLOW = ["paid", "process", "pick", "packing", "packed", "ready_to_pickup", "sent", "completed"]
 TERMINAL = {"cancelled", "returned", "completed"}
-FOCAL_BUNDLE = "BND-SANCTUM-NOCTIS-20-A1"
+VALID_STATUS = set(STATUS_FLOW) | TERMINAL
+FOCAL_BUNDLE = "Sanctum+Noctis-20ml-A1"
 
-# Pemetaan enum internal (lowercase) ke enum baku receiver core (UPPERCASE)
-STATUS_ENUM_MAP = {
-    "paid": "PAID", "process": "PROCESSING", "pick": "PICKING", "packing": "PICKING",
-    "packed": "PACKED", "ready_to_pickup": "HANDOVER_TO_COURIER", "sent": "IN_TRANSIT",
-    "completed": "COMPLETED", "cancelled": "CANCELLED", "returned": "RETURNED",
-}
+app = FastAPI(title="osr-wms (ERP Perpack Simulator) — blueprint v2")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
-app = FastAPI(title="osr-wms-stub (ERP Perpack tiruan)")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+# ============================ Pydantic v2 ============================
+
+class CheckoutItem(BaseModel):
+    sku: str
+    qty: int = Field(default=1, ge=1)
+
+
+class CheckoutRequest(BaseModel):
+    order_ref: str
+    channel: str = "WEBSTORE"
+    items: list[CheckoutItem]
+
+
+# ============================ DB helpers ============================
+
+def conn():
+    c = sqlite3.connect(WMS_DB)
+    c.row_factory = sqlite3.Row
+    return c
 
 
 def q(sql, args=()):
-    conn = sqlite3.connect(WMS_DB)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(sql, args).fetchall()
-    conn.close()
+    c = conn()
+    rows = c.execute(sql, args).fetchall()
+    c.close()
     return rows
 
 
@@ -67,211 +84,220 @@ def event_id(prefix):
     return f"{prefix}_{time.strftime('%Y%m%d_%H%M%S')}_{int(time.time() % 1000)}"
 
 
-def post_webhook(payload):
-    """Kirim webhook ke receiver core (Bearer token). Return (status_code, ok)."""
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {WEBHOOK_TOKEN}",
-        "Idempotency-Key": str(payload.get("event_id") or ""),
+# ============================ Modul A — BOM engine ============================
+
+def component_stock(cur, sku):
+    row = cur.execute("SELECT COALESCE(SUM(available),0) s FROM stocks WHERE variant_sku=?", (sku,)).fetchone()
+    return row["s"]
+
+
+def deduct_stock(cur, sku, qty):
+    """Potong qty dari stok (distributed, greedy dari gudang terbanyak)."""
+    rows = cur.execute("SELECT variant_sku, warehouse_id, available FROM stocks "
+                       "WHERE variant_sku=? AND available > 0 ORDER BY available DESC", (sku,)).fetchall()
+    remaining = qty
+    for r in rows:
+        if remaining <= 0:
+            break
+        take = min(r["available"], remaining)
+        cur.execute("UPDATE stocks SET available = available - ?, updated_at=datetime('now') "
+                    "WHERE variant_sku=? AND warehouse_id=?",
+                    (take, sku, r["warehouse_id"]))
+        remaining -= take
+    if remaining > 0:
+        raise HTTPException(409, f"stok {sku} tidak cukup (kurang {remaining})")
+
+
+def bom_available(sku):
+    """Stok bundle = min(floor(stok_komponen / multiplier)). Non-bundle = stok fisik."""
+    c = conn()
+    cur = c.cursor()
+    v = cur.execute("SELECT sku, name, gender, price_idr, is_bundle FROM variants WHERE sku=?", (sku,)).fetchone()
+    if not v:
+        c.close()
+        return None
+    if not bool(v["is_bundle"]):
+        out = {"sku": sku, "name": v["name"], "is_bundle": False,
+               "available_stock": component_stock(cur, sku), "components": []}
+        c.close()
+        return out
+    comps = cur.execute("SELECT component_sku, multiplier_qty FROM sku_bom WHERE bundle_sku=?", (sku,)).fetchall()
+    components = []
+    for comp in comps:
+        stk = component_stock(cur, comp["component_sku"])
+        components.append({"component_sku": comp["component_sku"], "stock_available": stk,
+                           "multiplier": comp["multiplier_qty"]})
+    c.close()
+    if not components:
+        return {"sku": sku, "name": v["name"], "is_bundle": True, "available_stock": 0, "components": []}
+    avail = min(stk // comp["multiplier"] for comp in components for stk in [comp["stock_available"]])
+    return {"sku": sku, "name": v["name"], "is_bundle": True, "available_stock": avail, "components": components}
+
+
+# ============================ Modul C — HMAC + webhook ============================
+
+def _sign(raw_body: bytes) -> str:
+    return hm.new(WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+
+def build_status_payload(order_row, previous_status, new_status):
+    return {
+        "event_id": event_id("evt_wms_status"),
+        "event": "order.status_updated",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "data": {
+            "order_ref": order_row["order_ref"],
+            "wms_order_id": order_row["wms_order_id"],
+            "channel": order_row["channel"],
+            "previous_status": previous_status,
+            "current_status": new_status,
+            "courier": {
+                "name": order_row["courier_name"],
+                "service": order_row["courier_service"],
+                "tracking_number": order_row["tracking_number"],
+            },
+            "updated_by": order_row["actor_last"] or "SYSTEM",
+        },
     }
+
+
+def post_webhook(payload, lane="4.2"):
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = _sign(raw)
+    headers = {"Content-Type": "application/json", "X-Perpack-Signature": f"sha256={sig}"}
     try:
-        r = httpx.post(CORE_WEBHOOK_URL, json=payload, headers=headers, timeout=20)
-        return r.status_code, (r.status_code in (200, 202))
-    except Exception as e:
-        return 0, False
+        r = httpx.post(WEBHOOK_URL, content=raw, headers=headers, timeout=20)
+        status, ok = r.status_code, r.status_code in (200, 202, 204)
+    except Exception:
+        status, ok = 0, False
+    c = conn()
+    c.execute("INSERT INTO webhook_delivery_log (event_id,event,lane,attempt,http_status,signature,sent_at) "
+              "VALUES (?,?,?,?,?,?,datetime('now'))",
+              (payload.get("event_id"), payload.get("event"), lane, 1, status, f"sha256={sig[:12]}\u2026"))
+    c.commit()
+    c.close()
+    return status, ok
 
 
-# ============================ Jalur A ============================
+def dispatch_status_webhook(order_row, previous_status, new_status):
+    payload = build_status_payload(order_row, previous_status, new_status)
+    post_webhook(payload, lane="4.2")
+    return payload
+
+
+# ============================ Modul A — endpoint ============================
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "service": "osr-wms-stub", "mode": OSR_MODE}
+    return {"ok": True, "service": "osr-wms (ERP Simulator v2)", "mode": OSR_MODE}
 
 
-@app.get("/v1/open/products/group/page")
-def products_page(gender: str = None, page: int = 1, limit: int = 50):
-    sql = "SELECT sku, name, gender, price_idr, is_bundle FROM variants WHERE is_active=1"
-    args = []
-    if gender:
-        sql += " AND gender=?"
-        args.append(gender.upper())
-    sql += " LIMIT ? OFFSET ?"
-    args += [limit, (page - 1) * limit]
-    return envelope([dict(r) for r in q(sql, args)])
-
-
-@app.get("/v1/open/products/details")
-def product_details(sku: str):
-    row = q1("SELECT sku, name, gender, price_idr, is_bundle FROM variants WHERE sku=?", (sku,))
-    if not row:
+@app.get("/api/v1/inventory/{sku}")
+def inventory(sku: str):
+    result = bom_available(sku)
+    if result is None:
         raise HTTPException(404, "SKU tidak ditemukan")
-    return envelope(row)
+    return envelope(result)
 
 
-@app.get("/v1/open/stocks")
-def get_stocks():
-    return envelope([dict(r) for r in q(
-        "SELECT s.variant_sku, s.warehouse_id, w.name AS warehouse_name, "
-        "s.available, s.on_order, s.reserved FROM stocks s "
-        "JOIN warehouses w ON w.id=s.warehouse_id")])
+# ============================ Modul B — checkout (Zero-Click) ============================
+
+@app.post("/api/v1/storefront/checkout")
+def checkout(req: CheckoutRequest, background: BackgroundTasks):
+    c = conn()
+    c.execute("BEGIN IMMEDIATE")          # write lock = atomic (simulator)
+    cur = c.cursor()
+    try:
+        total = 0
+        for it in req.items:
+            v = cur.execute("SELECT sku, price_idr, is_bundle FROM variants WHERE sku=?", (it.sku,)).fetchone()
+            if not v:
+                raise HTTPException(404, f"SKU {it.sku} tidak ada")
+            if v["is_bundle"]:
+                comps = cur.execute("SELECT component_sku, multiplier_qty FROM sku_bom WHERE bundle_sku=?", (it.sku,)).fetchall()
+                if not comps:
+                    raise HTTPException(409, f"bundle {it.sku} tanpa relasi BOM (baseline)")
+                for comp in comps:
+                    deduct_stock(cur, comp["component_sku"], it.qty * comp["multiplier_qty"])
+            else:
+                deduct_stock(cur, it.sku, it.qty)
+            total += v["price_idr"] * it.qty
+
+        cur.execute("INSERT INTO orders (order_ref,channel,status,actor_last,total_idr,paid_at,processing_at) "
+                    "VALUES (?,?,?,?,?,datetime('now'),datetime('now'))",
+                    (req.order_ref, req.channel, "paid", "SYSTEM", total))
+        oid = cur.lastrowid
+        for it in req.items:
+            v = cur.execute("SELECT price_idr FROM variants WHERE sku=?", (it.sku,)).fetchone()
+            cur.execute("INSERT INTO order_items (order_id,variant_sku,qty,unit_price_idr) VALUES (?,?,?,?)",
+                        (oid, it.sku, it.qty, v["price_idr"]))
+        # Zero-Click: paid -> process (<5s, actor SYSTEM) — dalam transaksi yang sama
+        cur.execute("UPDATE orders SET status='process', actor_last='SYSTEM' WHERE id=?", (oid,))
+        cur.execute("INSERT INTO order_status_history (order_id,to_status,actor,source) VALUES (?,?,?,?)",
+                    (oid, "process", "SYSTEM", "CHECKOUT"))
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
+
+    order_row = q1("SELECT * FROM orders WHERE id=?", (oid,))
+    background.add_task(dispatch_status_webhook, order_row, "paid", "process")
+    return {
+        "message": "Pesanan terbayar dan otomatis diproses ke gudang (Zero-Click).",
+        "order_ref": req.order_ref, "status": "process", "updated_by": "SYSTEM",
+        "sla_seconds": ZERO_CLICK_SLA_SEC,
+    }
 
 
-def build_catalog_payload():
-    products = q("SELECT sku, name, gender, price_idr, is_bundle FROM variants WHERE is_active=1")
-    stocks = q("SELECT variant_sku, warehouse_id, available, on_order, reserved FROM stocks")
-    stock_map = {}
-    for r in stocks:
-        stock_map.setdefault(r["variant_sku"], []).append({
-            "warehouse_id": r["warehouse_id"], "available": r["available"],
-            "on_order": r["on_order"], "reserved": r["reserved"]})
-    data = [{"sku": p["sku"], "name": p["name"], "gender": p["gender"],
-             "price_idr": p["price_idr"], "is_bundle": p["is_bundle"],
-             "stocks": stock_map.get(p["sku"], [])} for p in products]
-    return {"event_id": event_id("evt_wms_catalog"), "event": "catalog.updated",
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-            "lane": "4.1", "data": {"products": data}}
+# ============================ Modul B — transisi status ============================
 
-
-@app.post("/v1/open/catalog/push")
-def push_catalog():
-    payload = build_catalog_payload()
-    status, ok = post_webhook(payload)
-    return {"sent": ok, "to": f"{CORE_WEBHOOK_URL}/{WEBHOOK_TOKEN}",
-            "products": len(payload["data"]["products"]), "upstream_status": status}
-
-
-# ============================ Jalur B ============================
-
-def build_status_payload(order_row, new_status):
-    """Payload order.status_changed (kontrak receiver core)."""
-    return {"event": "order.status_changed", "event_id": event_id("evt_wms_status"),
-            "source": "wms-4.2", "occurred_at": int(time.time()),
-            "data": {"ref": order_row["order_ref"],
-                     "status": STATUS_ENUM_MAP.get(new_status, new_status.upper()),
-                     "tracking_no": order_row["tracking_number"],
-                     "actor": order_row["actor_last"] or "SYSTEM"}}
-
-
-def build_stock_payload(material_code, delta):
-    """Payload stock.updated (to-be): komponen terjual -> stok bundle turun."""
-    return {"event": "stock.updated", "event_id": event_id("evt_wms_stock"),
-            "source": "wms-4.1", "occurred_at": int(time.time()),
-            "data": {"materialCode": material_code, "delta": delta}}
-
-
-@app.post("/v1/open/sales-order")
-def create_order(body: dict):
-    oref = body.get("order_ref", f"ORD-{int(time.time())}")
-    conn = sqlite3.connect(WMS_DB)
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO orders (order_ref,channel,status,actor_last,total_idr,paid_at) "
-        "VALUES (?,?,?,?,?,datetime('now'))",
-        (oref, body.get("channel", "WEBSTORE"), "paid", "SYSTEM", body.get("total_idr", 0)))
-    oid = cur.lastrowid
-    for it in body.get("items", []):
-        cur.execute("INSERT INTO order_items (order_id,variant_sku,qty,unit_price_idr) VALUES (?,?,?,?)",
-                    (oid, it["sku"], it.get("qty", 1), it.get("price", 0)))
-    cur.execute("INSERT INTO order_status_history (order_id,to_status,actor,source) VALUES (?,?,?,?)",
-                (oid, "paid", "SYSTEM", "WEBHOOK"))
-    conn.commit()
-    conn.close()
-    return envelope({"id": oid, "order_ref": oref, "status": "paid",
-                     "note": "baseline: status stagnan (auto-ack off)"})
-
-
-@app.get("/v1/open/sales-order/list")
-def list_orders(status: str = None):
-    sql = ("SELECT id, order_ref, wms_order_id, channel, status, actor_last, "
-           "courier_name, tracking_number, total_idr FROM orders")
-    args = []
-    if status:
-        sql += " WHERE status=?"
-        args.append(status)
-    return envelope([dict(r) for r in q(sql, args)])
-
-
-@app.post("/v1/open/sales-order/{oid}/process")
-def process_order(oid: int):
-    if OSR_MODE == "baseline":
-        raise HTTPException(404, "endpoint /process belum tersedia (cacat SoW Modul B.2)")
-    o = q1("SELECT * FROM orders WHERE id=?", (oid,))
+@app.post("/api/v1/wms/orders/{order_ref}/transition")
+def transition(order_ref: str, target_status: str, tracking_number: str = None,
+               background: BackgroundTasks = None):
+    if target_status not in VALID_STATUS:
+        raise HTTPException(422, "enum status tidak dikenal")
+    o = q1("SELECT * FROM orders WHERE order_ref=?", (order_ref,))
     if not o:
         raise HTTPException(404, "order tidak ditemukan")
-    if o["status"] != "paid":
-        raise HTTPException(409, "hanya order berstatus paid yang bisa diproses")
-    return _transition(oid, "process", "SYSTEM", "WEBHOOK")
-
-
-@app.post("/v1/open/sales-order/{oid}/cancel")
-def cancel_order(oid: int):
-    o = q1("SELECT * FROM orders WHERE id=?", (oid,))
-    if not o:
-        raise HTTPException(404, "order tidak ditemukan")
-    if o["status"] in TERMINAL:
-        raise HTTPException(409, "order terminal, tidak bisa dibatalkan")
-    return _transition(oid, "cancelled", "STAFF", "MANUAL_UI")
-
-
-@app.post("/v1/open/sales-order/{oid}/status")
-def manual_status(oid: int, body: dict):
-    """Simulasi klik manual staf; memicu outbound status webhook (baseline: kosong)."""
-    o = q1("SELECT * FROM orders WHERE id=?", (oid,))
-    if not o:
-        raise HTTPException(404, "order tidak ditemukan")
-    new_status = body.get("status")
-    if new_status not in STATUS_FLOW and new_status not in TERMINAL:
-        raise HTTPException(422, "enum tidak dikenal")
-    return _transition(oid, new_status, body.get("actor", "STAFF:manual"), "MANUAL_UI")
-
-
-def _transition(oid, new_status, actor, source):
-    o = q1("SELECT * FROM orders WHERE id=?", (oid,))
     prev = o["status"]
     if prev in TERMINAL:
         raise HTTPException(409, "order terminal — immutable")
-    if OSR_MODE == "tobe" and new_status in STATUS_FLOW and prev in STATUS_FLOW and \
-            STATUS_FLOW.index(new_status) < STATUS_FLOW.index(prev):
+    # no-regression: status tidak boleh mundur
+    if target_status in STATUS_FLOW and prev in STATUS_FLOW and \
+            STATUS_FLOW.index(target_status) < STATUS_FLOW.index(prev):
         raise HTTPException(409, "no-regression: status tidak boleh mundur")
-    conn = sqlite3.connect(WMS_DB)
-    cur = conn.cursor()
-    cur.execute("UPDATE orders SET status=?, actor_last=? WHERE id=?", (new_status, actor, oid))
-    cur.execute("INSERT INTO order_status_history (order_id,from_status,to_status,actor,source) "
-                "VALUES (?,?,?,?,?)", (oid, prev, new_status, actor, source))
-    conn.commit()
-    conn.close()
-    # outbound webhook (jembatan data)
-    if OSR_MODE == "baseline":
-        # cacat SoW: event dengan data kosong (payload tidak membawa status)
-        out = {"event": "order.status_changed", "event_id": event_id("evt_wms_status"),
-               "source": "wms-4.2", "data": {}}
+
+    actor = "COURIER" if target_status in ("sent", "completed") else "SYSTEM"
+    c = conn()
+    c.execute("UPDATE orders SET status=?, actor_last=?, courier_name=COALESCE(?,courier_name), "
+              "tracking_number=COALESCE(?,tracking_number) WHERE id=?",
+              (target_status, actor, (o["courier_name"] or "sicepat"), tracking_number, o["id"]))
+    c.execute("INSERT INTO order_status_history (order_id,from_status,to_status,actor,source) VALUES (?,?,?,?,?)",
+              (o["id"], prev, target_status, actor, "WMS"))
+    c.commit()
+    c.close()
+
+    order_row = q1("SELECT * FROM orders WHERE id=?", (o["id"],))
+    if background:
+        background.add_task(dispatch_status_webhook, order_row, prev, target_status)
+        status, ok = None, True
     else:
-        out = build_status_payload(q1("SELECT * FROM orders WHERE id=?", (oid,)), new_status)
-    status, ok = post_webhook(out)
-    return {"id": oid, "from": prev, "to": new_status, "webhook_sent": ok,
-            "webhook_status": status, "mode": OSR_MODE}
+        status, ok = post_webhook(build_status_payload(order_row, prev, target_status), lane="4.2")
+
+    envelope_d = {"order_ref": order_ref, "from": prev, "to": target_status,
+                  "updated_by": actor, "webhook_sent": ok, "webhook_status": status}
+    return envelope(envelope_d)
 
 
-@app.get("/v1/open/logistic/track")
-def logistic_track(airway_bill: str):
-    if OSR_MODE == "baseline":
-        raise HTTPException(404, "integrasi resi 3PL belum tersedia (cacat SoW Modul C.5)")
-    return envelope({"airway_bill": airway_bill, "status": "completed", "courier": "sicepat"})
+# ============================ Modul C — audit ============================
 
-
-@app.post("/v1/open/components/{sku}/sold")
-def component_sold(sku: str, body: dict):
-    """To-be: komponen terjual -> kurangi stok + kirim webhook stock.updated."""
-    delta = int(body.get("delta", body.get("qty", 1)))
-    conn = sqlite3.connect(WMS_DB)
-    cur = conn.cursor()
-    cur.execute("UPDATE stocks SET available = MAX(0, available - ?) "
-                "WHERE variant_sku=? AND warehouse_id=8", (delta, sku))
-    conn.commit()
-    conn.close()
-    payload = build_stock_payload(sku, delta)
-    status, ok = post_webhook(payload)
-    return envelope({"sku": sku, "delta": delta, "webhook_sent": ok, "webhook_status": status})
+@app.get("/api/v1/audit/webhook-logs")
+def audit_logs(limit: int = 100):
+    rows = q("SELECT id, event_id, event, lane, attempt, http_status, signature, sent_at "
+             "FROM webhook_delivery_log ORDER BY id DESC LIMIT ?", (limit,))
+    return envelope([dict(r) for r in rows])
 
 
 # ============================ Admin (osr-admin) ============================
@@ -286,7 +312,7 @@ def admin_summary():
     n_ev = q1("SELECT COUNT(*) c FROM wms_webhook_events WHERE lane='4.2'")["c"]
     n_valid = q1("SELECT COUNT(*) c FROM wms_webhook_events WHERE lane='4.2' AND payload_valid=1")["c"]
     quota = q1("SELECT qty FROM bundle_quota_manual WHERE bundle_sku=?", (FOCAL_BUNDLE,))
-    n_bc = q1("SELECT COUNT(*) c FROM bundle_components")["c"]
+    n_bom = q1("SELECT COUNT(*) c FROM sku_bom")["c"]
     m2291 = q1("SELECT available FROM stocks WHERE variant_sku='M2291'")
     m2292 = q1("SELECT available FROM stocks WHERE variant_sku='M2292'")
     dpmo = round((n_ev - n_valid) / n_ev * 1_000_000) if n_ev else 0
@@ -296,13 +322,23 @@ def admin_summary():
                    "completed": n_comp, "manual": n_manual,
                    "stuck_pct": round(n_stuck / n_total * 100, 1) if n_total else 0},
         "webhook_4_2": {"events": n_ev, "valid": n_valid,
-                        "validity_pct": round(n_valid / n_ev * 100, 1) if n_ev else 0,
-                        "dpmo": dpmo},
+                        "validity_pct": round(n_valid / n_ev * 100, 1) if n_ev else 0, "dpmo": dpmo},
         "bundle": {"sku": FOCAL_BUNDLE, "quota": quota["qty"] if quota else None,
-                   "bundle_components_rows": n_bc,
+                   "bundle_components_rows": n_bom,
                    "component_m2291": m2291["available"] if m2291 else None,
                    "component_m2292": m2292["available"] if m2292 else None},
     })
+
+
+@app.get("/v1/open/sales-order/list")
+def list_orders(status: str = None):
+    sql = ("SELECT id, order_ref, wms_order_id, channel, status, actor_last, "
+           "courier_name, tracking_number, total_idr FROM orders")
+    args = []
+    if status:
+        sql += " WHERE status=?"
+        args.append(status)
+    return envelope([dict(r) for r in q(sql, args)])
 
 
 @app.get("/v1/open/admin/webhook-events")
@@ -326,33 +362,27 @@ def admin_bundles():
     out = []
     for qu in quotas:
         sku = qu["bundle_sku"]
-        n_comp = q1("SELECT COUNT(*) c FROM bundle_components WHERE bundle_sku=?", (sku,))["c"]
+        n_bom = q1("SELECT COUNT(*) c FROM sku_bom WHERE bundle_sku=?", (sku,))["c"]
         is_bundle = q1("SELECT is_bundle FROM variants WHERE sku=?", (sku,))
         st = q("SELECT available FROM stocks WHERE variant_sku=? LIMIT 1", (sku,))
-        out.append({
-            "bundle_sku": sku,
-            "is_bundle": bool(is_bundle["is_bundle"]) if is_bundle else None,
-            "quota_static": qu["qty"],
-            "bundle_components_rows": n_comp,
-            "stock_available": st[0]["available"] if st else None,
-            "set_by": qu["set_by"],
-        })
+        out.append({"bundle_sku": sku,
+                    "is_bundle": bool(is_bundle["is_bundle"]) if is_bundle else None,
+                    "quota_static": qu["qty"], "bundle_components_rows": n_bom,
+                    "stock_available": st[0]["available"] if st else None, "set_by": qu["set_by"]})
     return envelope(out)
 
 
-# serve osr-admin build (kalau sudah di-build) — satu URL untuk API + panel admin
+@app.post("/v1/open/catalog/push")
+def push_catalog():
+    return envelope({"note": "v2: katalog disajikan via GET /api/v1/inventory/{sku}", "sent": True})
+
+
+# ============================ static admin UI ============================
+
 ADMIN_DIST = os.path.join(BASE, "apps", "admin", "dist")
 if os.path.isdir(ADMIN_DIST):
     from fastapi.staticfiles import StaticFiles
     app.mount("/", StaticFiles(directory=ADMIN_DIST, html=True), name="admin-ui")
-
-
-@app.on_event("startup")
-def auto_push_catalog():
-    try:
-        push_catalog()
-    except Exception:
-        pass
 
 
 if __name__ == "__main__":

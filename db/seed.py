@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Seeder ERP (WMS Perpack) — Jalur A (Katalog) + Jalur B (Order & Status).
+"""Seeder ERP/WMS (blueprint v2) — BOM, order lifecycle, webhook.
 
-Mereproduksi cacat baseline SoW:
-  Jalur A: bundle_components = 0, is_bundle = FALSE, kuota bundle statis 10.932
-           (komponen M2291 11.927 vs M2292 10.932 -> phantom 995 unit)
-  Jalur B: 82 order macet di 'sent' (21 >2 hari), 57 completed via klik manual,
-           103 event webhook = 82 kosong + 1 enum salah -> DPMO 805.825 sigma 0,64
+Baseline (OSR_MODE=baseline): sku_bom 0 baris + is_bundle FALSE + kuota statis
+  -> phantom stock (cacat SoW). To-be (OSR_MODE=tobe): sku_bom terisi + is_bundle
+  TRUE -> engine MIN(floor(stok/multiplier)) aktif.
 """
 import json, os, random, sqlite3
 from datetime import datetime, timedelta
@@ -18,11 +16,14 @@ WMS_DB = os.path.join(BASE, "db", "wms.db")
 TOTAL_VARIANTS = 3696
 TOTAL_STOCK_ROWS = 7325
 SEED = 20260918
-FOCAL_BUNDLE = "BND-SANCTUM-NOCTIS-20-A1"
+FOCAL_BUNDLE = "Sanctum+Noctis-20ml-A1"     # SKU persis blueaprint v2 §5.1
+FOCAL_COMPONENTS = [("M2291", 1, 11927), ("M2292", 1, 10932)]
 
 TOTAL_ORDERS = 139
 STUCK_AT_SENT = 82
 STUCK_GT_2D = 21
+
+OSR_MODE = os.environ.get("OSR_MODE", "baseline")
 
 WAREHOUSES = [(8, "Warehouse Bogor"), (2, "Warehouse Jakarta"), (3, "Warehouse Surabaya")]
 
@@ -42,14 +43,16 @@ def main():
     rng = random.Random(SEED)
     bases = json.load(open(DATA))
 
-    # ---------- Jalur A: variants + stocks ----------
+    is_bundle_flag = 1 if OSR_MODE == "tobe" else 0
+
     def ins_variant(sku, name, gender, price, is_bundle=0):
         cur.execute("INSERT INTO variants (sku,name,gender,price_idr,is_bundle) VALUES (?,?,?,?,?)",
                     (sku, name, gender, price, is_bundle))
 
     ins_variant("M2291", "Sanctum Eau de Parfum 20mL", "MEN", 89000)
     ins_variant("M2292", "Noctis Eau de Parfum 20mL", "MEN", 89000)
-    ins_variant(FOCAL_BUNDLE, "Sanctum + Noctis - Bundling 2 Botol 20mL", "UNISEX", 169000, is_bundle=0)
+    ins_variant(FOCAL_BUNDLE, "Sanctum + Noctis - Bundling 2 Botol 20mL", "UNISEX", 169000,
+                is_bundle=is_bundle_flag)
 
     variant_skus = ["M2291", "M2292", FOCAL_BUNDLE]
     n = 3
@@ -61,6 +64,7 @@ def main():
         variant_skus.append(f"M{3000 + n}")
         n += 1
 
+    # stok fisik komponen (exact) + bundle (kuota statis di baseline)
     cur.execute("INSERT INTO stocks (variant_sku,warehouse_id,available) VALUES (?,8,11927)", ("M2291",))
     cur.execute("INSERT INTO stocks (variant_sku,warehouse_id,available) VALUES (?,8,10932)", ("M2292",))
     cur.execute("INSERT INTO stocks (variant_sku,warehouse_id,available) VALUES (?,8,10932)", (FOCAL_BUNDLE,))
@@ -76,11 +80,18 @@ def main():
                         (sku, rng.randint(0, 15000)))
             stock_rows += 1
 
-    # baseline defects Jalur A (bundle_components sengaja kosong)
-    cur.execute("INSERT INTO bundle_quota_manual (bundle_sku,qty,set_by) VALUES (?,?,?)",
-                (FOCAL_BUNDLE, 10932, "STAFF:manual"))
+    # Modul A — relasi BOM
+    if OSR_MODE == "tobe":
+        for comp_sku, mult, _stk in FOCAL_COMPONENTS:
+            cur.execute("INSERT INTO sku_bom (bundle_sku,component_sku,multiplier_qty,source,synced_at) "
+                        "VALUES (?,?,?,?,datetime('now'))",
+                        (FOCAL_BUNDLE, comp_sku, mult, "PERPACK_API"))
+    else:
+        # baseline: kuota statis manual (cacat), sku_bom tetap 0 baris
+        cur.execute("INSERT INTO bundle_quota_manual (bundle_sku,qty,set_by) VALUES (?,?,?)",
+                    (FOCAL_BUNDLE, 10932, "STAFF:manual"))
 
-    # ---------- Jalur B: orders (baseline) ----------
+    # ---- Modul B: orders (baseline snapshot) -------------------------------
     def ins_order(idx, status, actor_last, sent_days=None, completed=False):
         cur.execute(
             "INSERT INTO orders (order_ref,wms_order_id,channel,status,actor_last,"
@@ -91,20 +102,17 @@ def main():
              rng.randint(34000, 189000), now_iso(5),
              now_iso(sent_days) if sent_days else None,
              now_iso(0) if completed else None))
-        # 1 item per order (acu ke komponen fokus atau variant acak)
         sku = "M2291" if idx % 2 else "M2292"
         cur.execute("INSERT INTO order_items (order_id,variant_sku,qty,unit_price_idr) "
                     "VALUES (last_insert_rowid(),?,1,89000)", (sku,))
 
-    # 82 macet di 'sent' (21 pertama menggantung >2 hari)
     for i in range(1, STUCK_AT_SENT + 1):
         ins_order(i, "sent", "COURIER", sent_days=(3 if i <= STUCK_GT_2D else 1))
-    # 57 completed via klik manual staf
     for i in range(STUCK_AT_SENT + 1, TOTAL_ORDERS + 1):
         ins_order(i, "completed", "STAFF:manual", completed=True)
 
-    # ---------- Jalur B: 103 event webhook (telemetri outbound) ----------
-    ev = [("{}", 0, 0, None)] * 82                                   # body kosong
+    # ---- telemetri webhook baseline (103 event) -------------------------------
+    ev = [("{}", 0, 0, None)] * 82
     for status in (["paid"] * 8 + ["process"] * 6 + ["cancelled"] * 6):
         ev.append((json.dumps({"event": "order.status_updated",
                                "data": {"current_status": status}}), 1, 0, None))
@@ -119,10 +127,10 @@ def main():
 
     conn.commit()
 
-    # ---------- summary ----------
+    # ---- summary ----
     n_v = cur.execute("SELECT COUNT(*) FROM variants").fetchone()[0]
     n_s = cur.execute("SELECT COUNT(*) FROM stocks").fetchone()[0]
-    n_bc = cur.execute("SELECT COUNT(*) FROM bundle_components").fetchone()[0]
+    n_bom = cur.execute("SELECT COUNT(*) FROM sku_bom").fetchone()[0]
     n_stuck = cur.execute("SELECT COUNT(*) FROM orders WHERE status='sent'").fetchone()[0]
     n_comp = cur.execute("SELECT COUNT(*) FROM orders WHERE status='completed'").fetchone()[0]
     n_gt2 = cur.execute("SELECT COUNT(*) FROM orders WHERE status='sent' AND sent_at < ?",
@@ -131,12 +139,11 @@ def main():
     n_valid = cur.execute("SELECT COUNT(*) FROM wms_webhook_events WHERE payload_valid=1").fetchone()[0]
     conn.close()
 
-    phantom = 11927 - 10932
     dpmo = (82 + 1) / 103 * 1_000_000
-    print(f"[seed] variants = {n_v}/{TOTAL_VARIANTS} | stocks = {n_s}/{TOTAL_STOCK_ROWS} | bundle_components = {n_bc}")
-    print(f"[seed] Jalur A: kuota statis 10.932 vs M2291 11.927 / M2292 10.932 -> phantom {phantom:,}")
-    print(f"[seed] Jalur B: {n_stuck} order macet 'sent' (>{STUCK_GT_2D} hari: {n_gt2}) | {n_comp} completed manual")
-    print(f"[seed] Jalur B: {n_ev} event webhook | valid {n_valid} ({n_valid/n_ev*100:.1f}%) | DPMO {dpmo:,.0f}")
+    print(f"[seed] mode={OSR_MODE} | variants={n_v} | stocks={n_s} | sku_bom={n_bom}")
+    print(f"[seed] Modul A: kuota statis 10.932 vs M2291 11.927 / M2292 10.932 -> phantom {11927-10932:,}")
+    print(f"[seed] Modul B: {n_stuck} macet 'sent' (>2hri {n_gt2}) | {n_comp} completed manual")
+    print(f"[seed] Modul C: {n_ev} event | valid {n_valid} ({n_valid/n_ev*100:.1f}%) | DPMO {dpmo:,.0f}")
     print(f"[seed] DB -> {WMS_DB}")
 
 
