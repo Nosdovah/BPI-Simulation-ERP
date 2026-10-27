@@ -1,4 +1,4 @@
--- SQLite schema (relational in-memory simulator) — blueprint v2.
+-- SQLite schema (relational in-memory simulator) — blueprint v2 (TO-BE).
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS variants (
@@ -7,13 +7,12 @@ CREATE TABLE IF NOT EXISTS variants (
   name        TEXT NOT NULL,
   gender      TEXT CHECK(gender IN ('MEN','UNISEX','WOMEN')),
   price_idr   INTEGER NOT NULL,
-  is_bundle   INTEGER NOT NULL DEFAULT 0,        -- baseline: 0; to-be: 1
+  is_bundle   INTEGER NOT NULL DEFAULT 0,        -- 1 = bundle komposit
   is_active   INTEGER NOT NULL DEFAULT 1,
   created_at  TEXT DEFAULT (datetime('now'))
 );
 
 -- Modul A — relasi BOM (sku_bom): bundle -> komponen + multiplier.
--- BASELINE: 0 baris (cacat). TO-BE: terisi dari config WMS.
 CREATE TABLE IF NOT EXISTS sku_bom (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
   bundle_sku     TEXT NOT NULL,
@@ -37,14 +36,6 @@ CREATE TABLE IF NOT EXISTS stocks (
   reserved     INTEGER NOT NULL DEFAULT 0,
   updated_at   TEXT DEFAULT (datetime('now')),
   PRIMARY KEY (variant_sku, warehouse_id)
-);
-
--- BASELINE: static manual quota for bundles (di-nonaktifkan di to-be).
-CREATE TABLE IF NOT EXISTS bundle_quota_manual (
-  bundle_sku TEXT PRIMARY KEY,
-  qty        INTEGER NOT NULL,
-  set_by     TEXT,
-  set_at     TEXT DEFAULT (datetime('now'))
 );
 
 -- ===== Modul B — Order & Status =====
@@ -79,26 +70,12 @@ CREATE TABLE IF NOT EXISTS order_status_history (
   from_status TEXT,
   to_status   TEXT NOT NULL,
   actor       TEXT NOT NULL,   -- SYSTEM | STAFF | COURIER
-  source      TEXT NOT NULL,   -- WEBHOOK | CHECKOUT | MANUAL_UI | TRACKER
+  source      TEXT NOT NULL,   -- CHECKOUT | WMS | TRACKER
   event_id    TEXT,
   occurred_at TEXT DEFAULT (datetime('now'))
 );
 
--- ===== Modul C — telemetri webhook =====
-CREATE TABLE IF NOT EXISTS wms_webhook_events (
-  id            INTEGER PRIMARY KEY AUTOINCREMENT,
-  event_id      TEXT,
-  lane          TEXT,              -- 4.1 | 4.2
-  received_at   TEXT DEFAULT (datetime('now')),
-  raw_body      TEXT,
-  payload_valid INTEGER DEFAULT 0,
-  mapper_rejected INTEGER DEFAULT 0,
-  reject_reason TEXT,
-  signature_ok  INTEGER,
-  processed_at  TEXT
-);
-
--- Log pengiriman outbound webhook (untuk /api/v1/audit/webhook-logs)
+-- ===== Modul C — webhook outbound (HMAC) =====
 CREATE TABLE IF NOT EXISTS webhook_delivery_log (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id     TEXT,

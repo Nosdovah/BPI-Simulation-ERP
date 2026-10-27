@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""ERP/WMS Simulator (Perpack) — blueprint v2.
+"""ERP/WMS Simulator (Perpack) — blueprint v2 (TO-BE).
 
 FastAPI Data-Bridge server side: BOM/Virtual Kitting engine (Modul A),
 Zero-Click order lifecycle (Modul B), outbound webhook ber-tanda tangan
@@ -31,7 +31,6 @@ WMS_DB = os.path.join(BASE, "db", "wms.db")
 
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", os.environ.get("OSR_WEBHOOK_URL", "http://127.0.0.1:3000/api/webhooks/wms"))
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", os.environ.get("OSR_WEBHOOK_HMAC_SECRET", "osr-local-hmac-secret"))
-OSR_MODE = os.environ.get("OSR_MODE", "baseline")
 ZERO_CLICK_SLA_SEC = 5.0
 
 STATUS_FLOW = ["paid", "process", "pick", "packing", "packed", "ready_to_pickup", "sent", "completed"]
@@ -39,7 +38,7 @@ TERMINAL = {"cancelled", "returned", "completed"}
 VALID_STATUS = set(STATUS_FLOW) | TERMINAL
 FOCAL_BUNDLE = "Sanctum+Noctis-20ml-A1"
 
-app = FastAPI(title="osr-wms (ERP Perpack Simulator) — blueprint v2")
+app = FastAPI(title="osr-wms (ERP Perpack Simulator) — blueprint v2 to-be")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -189,7 +188,7 @@ def dispatch_status_webhook(order_row, previous_status, new_status):
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True, "service": "osr-wms (ERP Simulator v2)", "mode": OSR_MODE}
+    return {"ok": True, "service": "osr-wms (ERP Simulator v2)", "mode": "tobe"}
 
 
 @app.get("/api/v1/inventory/{sku}")
@@ -216,7 +215,7 @@ def checkout(req: CheckoutRequest, background: BackgroundTasks):
             if v["is_bundle"]:
                 comps = cur.execute("SELECT component_sku, multiplier_qty FROM sku_bom WHERE bundle_sku=?", (it.sku,)).fetchall()
                 if not comps:
-                    raise HTTPException(409, f"bundle {it.sku} tanpa relasi BOM (baseline)")
+                    raise HTTPException(409, f"bundle {it.sku} tanpa relasi BOM")
                 for comp in comps:
                     deduct_stock(cur, comp["component_sku"], it.qty * comp["multiplier_qty"])
             else:
@@ -304,29 +303,20 @@ def audit_logs(limit: int = 100):
 
 @app.get("/v1/open/admin/summary")
 def admin_summary():
-    n_total = q1("SELECT COUNT(*) c FROM orders")["c"]
-    n_stuck = q1("SELECT COUNT(*) c FROM orders WHERE status='sent'")["c"]
-    n_gt2 = q1("SELECT COUNT(*) c FROM orders WHERE status='sent' AND sent_at < datetime('now','-2 days')")["c"]
-    n_comp = q1("SELECT COUNT(*) c FROM orders WHERE status='completed'")["c"]
-    n_manual = q1("SELECT COUNT(*) c FROM orders WHERE status='completed' AND actor_last='STAFF:manual'")["c"]
-    n_ev = q1("SELECT COUNT(*) c FROM wms_webhook_events WHERE lane='4.2'")["c"]
-    n_valid = q1("SELECT COUNT(*) c FROM wms_webhook_events WHERE lane='4.2' AND payload_valid=1")["c"]
-    quota = q1("SELECT qty FROM bundle_quota_manual WHERE bundle_sku=?", (FOCAL_BUNDLE,))
+    n_var = q1("SELECT COUNT(*) c FROM variants")["c"]
+    n_bundle = q1("SELECT COUNT(*) c FROM variants WHERE is_bundle=1")["c"]
     n_bom = q1("SELECT COUNT(*) c FROM sku_bom")["c"]
-    m2291 = q1("SELECT available FROM stocks WHERE variant_sku='M2291'")
-    m2292 = q1("SELECT available FROM stocks WHERE variant_sku='M2292'")
-    dpmo = round((n_ev - n_valid) / n_ev * 1_000_000) if n_ev else 0
+    focal = bom_available(FOCAL_BUNDLE)
+    n_orders = q1("SELECT COUNT(*) c FROM orders")["c"]
+    by_status = {r["status"]: r["c"] for r in q("SELECT status, COUNT(*) c FROM orders GROUP BY status")}
+    n_delivered = q1("SELECT COUNT(*) c FROM webhook_delivery_log WHERE http_status IN (200,202,204)")["c"]
+    n_attempt = q1("SELECT COUNT(*) c FROM webhook_delivery_log")["c"]
     return envelope({
-        "mode": OSR_MODE,
-        "orders": {"total": n_total, "stuck_sent": n_stuck, "stuck_gt2d": n_gt2,
-                   "completed": n_comp, "manual": n_manual,
-                   "stuck_pct": round(n_stuck / n_total * 100, 1) if n_total else 0},
-        "webhook_4_2": {"events": n_ev, "valid": n_valid,
-                        "validity_pct": round(n_valid / n_ev * 100, 1) if n_ev else 0, "dpmo": dpmo},
-        "bundle": {"sku": FOCAL_BUNDLE, "quota": quota["qty"] if quota else None,
-                   "bundle_components_rows": n_bom,
-                   "component_m2291": m2291["available"] if m2291 else None,
-                   "component_m2292": m2292["available"] if m2292 else None},
+        "mode": "tobe",
+        "catalog": {"variants": n_var, "bundles": n_bundle, "bom_rows": n_bom},
+        "focal_bundle": focal,
+        "orders": {"total": n_orders, "by_status": by_status},
+        "webhook": {"delivered": n_delivered, "attempts": n_attempt},
     })
 
 
@@ -342,39 +332,32 @@ def list_orders(status: str = None):
 
 
 @app.get("/v1/open/admin/webhook-events")
-def admin_webhook_events(lane: str = None, valid: str = None):
-    sql = ("SELECT event_id, lane, payload_valid, mapper_rejected, reject_reason, raw_body "
-           "FROM wms_webhook_events")
-    conds, args = [], []
-    if lane:
-        conds.append("lane=?"); args.append(lane)
-    if valid in ("1", "0"):
-        conds.append("payload_valid=?"); args.append(int(valid))
-    if conds:
-        sql += " WHERE " + " AND ".join(conds)
-    sql += " ORDER BY id DESC LIMIT 200"
-    return envelope([dict(r) for r in q(sql, args)])
+def admin_webhook_events():
+    rows = q("SELECT event_id, event, lane, attempt, http_status, signature, sent_at "
+             "FROM webhook_delivery_log ORDER BY id DESC LIMIT 200")
+    return envelope([dict(r) for r in rows])
 
 
 @app.get("/v1/open/admin/bundles")
 def admin_bundles():
-    quotas = q("SELECT bundle_sku, qty, set_by, set_at FROM bundle_quota_manual")
+    bundles = q("SELECT DISTINCT bundle_sku FROM sku_bom")
     out = []
-    for qu in quotas:
-        sku = qu["bundle_sku"]
+    for b in bundles:
+        sku = b["bundle_sku"]
+        inv = bom_available(sku)
         n_bom = q1("SELECT COUNT(*) c FROM sku_bom WHERE bundle_sku=?", (sku,))["c"]
         is_bundle = q1("SELECT is_bundle FROM variants WHERE sku=?", (sku,))
-        st = q("SELECT available FROM stocks WHERE variant_sku=? LIMIT 1", (sku,))
         out.append({"bundle_sku": sku,
                     "is_bundle": bool(is_bundle["is_bundle"]) if is_bundle else None,
-                    "quota_static": qu["qty"], "bundle_components_rows": n_bom,
-                    "stock_available": st[0]["available"] if st else None, "set_by": qu["set_by"]})
+                    "bom_rows": n_bom,
+                    "available_stock": inv["available_stock"] if inv else None,
+                    "components": inv["components"] if inv else []})
     return envelope(out)
 
 
 @app.post("/v1/open/catalog/push")
 def push_catalog():
-    return envelope({"note": "v2: katalog disajikan via GET /api/v1/inventory/{sku}", "sent": True})
+    return envelope({"note": "to-be: katalog disajikan via GET /api/v1/inventory/{sku}", "sent": True})
 
 
 # ============================ static admin UI ============================

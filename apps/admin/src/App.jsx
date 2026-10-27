@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 
-const TABS = ['Overview', 'Orders', 'Webhook Events', 'Bundles', 'Replay']
+const TABS = ['Overview', 'Orders', 'Webhook Events', 'Bundles']
 const API_BASE = import.meta.env.VITE_API_BASE ?? '/api'
 
 async function get(path) {
@@ -26,8 +26,6 @@ export default function App() {
   const [events, setEvents] = useState([])
   const [bundles, setBundles] = useState([])
   const [orderStatus, setOrderStatus] = useState('')
-  const [eventLane, setEventLane] = useState('')
-  const [replayMsg, setReplayMsg] = useState(null)
   const [err, setErr] = useState(null)
 
   useEffect(() => {
@@ -39,32 +37,18 @@ export default function App() {
     const q = status ? `?status=${status}` : ''
     return get('/v1/open/sales-order/list' + q).then(setOrders).catch((e) => setErr(String(e)))
   }
-  async function loadEvents(lane) {
-    setEventLane(lane)
-    const q = lane ? `?lane=${lane}` : ''
-    return get('/v1/open/admin/webhook-events' + q).then(setEvents).catch((e) => setErr(String(e)))
+  async function loadEvents() {
+    return get('/v1/open/admin/webhook-events').then(setEvents).catch((e) => setErr(String(e)))
   }
   async function loadBundles() {
     return get('/v1/open/admin/bundles').then(setBundles).catch((e) => setErr(String(e)))
   }
-  async function replay() {
-    setReplayMsg('mengirim…')
-    try {
-      const r = await fetch(API_BASE + '/v1/open/catalog/push', { method: 'POST' })
-      const j = await r.json()
-      setReplayMsg(`${j.data.products} produk terkirim (upstream ${j.data.upstream_status})`)
-    } catch (e) {
-      setReplayMsg('gagal: ' + e)
-    }
-  }
 
   useEffect(() => { if (tab === 'Orders') loadOrders(orderStatus) }, [tab])
-  useEffect(() => { if (tab === 'Webhook Events') loadEvents(eventLane) }, [tab])
+  useEffect(() => { if (tab === 'Webhook Events') loadEvents() }, [tab])
   useEffect(() => { if (tab === 'Bundles') loadBundles() }, [tab])
 
-  const phantom = summary
-    ? (summary.bundle.component_m2291 ?? 0) - (summary.bundle.component_m2292 ?? 0)
-    : null
+  const comp = (sku) => (summary?.focal_bundle?.components || []).find((c) => c.component_sku === sku)
 
   return (
     <div className="page">
@@ -85,15 +69,15 @@ export default function App() {
 
       {tab === 'Overview' && summary && (
         <div className="grid">
+          <Card label="Mode" value="to-be" tone="ok" />
+          <Card label="SKU variants" value={summary.catalog.variants.toLocaleString('id-ID')} />
+          <Card label="Bundle (is_bundle)" value={summary.catalog.bundles} />
+          <Card label="Relasi BOM (sku_bom)" value={summary.catalog.bom_rows} tone="ok" />
+          <Card label="Stok bundle (BOM)" value={summary.focal_bundle.available_stock.toLocaleString('id-ID')} tone="ok" />
+          <Card label="Komponen M2291" value={comp('M2291')?.stock_available.toLocaleString('id-ID') ?? '—'} />
+          <Card label="Komponen M2292" value={comp('M2292')?.stock_available.toLocaleString('id-ID') ?? '—'} />
           <Card label="Order total" value={summary.orders.total} />
-          <Card label="Macet 'sent'" value={`${summary.orders.stuck_sent} (${summary.orders.stuck_pct}%)`} tone="warn" />
-          <Card label="Macet >2 hari" value={summary.orders.stuck_gt2d} tone="warn" />
-          <Card label="Completed manual" value={`${summary.orders.manual}/${summary.orders.completed}`} />
-          <Card label="Webhook valid (4.2)" value={`${summary.webhook_4_2.valid}/${summary.webhook_4_2.events} (${summary.webhook_4_2.validity_pct}%)`} tone="warn" />
-          <Card label="DPMO" value={summary.webhook_4_2.dpmo.toLocaleString('id-ID')} tone="warn" />
-          <Card label="Bundle quota statis" value={summary.bundle.quota?.toLocaleString('id-ID')} tone="warn" />
-          <Card label="BOM rows" value={summary.bundle.bundle_components_rows} tone="warn" />
-          <Card label="Phantom (M2291−M2292)" value={phantom?.toLocaleString('id-ID') + ' unit'} tone="warn" />
+          <Card label="Webhook terkirim (HMAC)" value={summary.webhook.delivered} tone="ok" />
         </div>
       )}
 
@@ -123,54 +107,37 @@ export default function App() {
       )}
 
       {tab === 'Webhook Events' && (
-        <>
-          <div className="filters">
-            {['', '4.1', '4.2'].map((l) => (
-              <button key={l || 'all'} className={eventLane === l ? 'active' : ''}
-                onClick={() => loadEvents(l)}>{l || 'Semua lane'}</button>
-            ))}
-          </div>
-          <table>
-            <thead><tr><th>event_id</th><th>lane</th><th>valid</th><th>rejected</th><th>reason</th></tr></thead>
-            <tbody>
-              {events.map((e) => (
-                <tr key={e.event_id}>
-                  <td>{e.event_id}</td>
-                  <td>{e.lane}</td>
-                  <td>{e.payload_valid ? '✅' : '❌'}</td>
-                  <td>{e.mapper_rejected ? '🚫' : ''}</td>
-                  <td>{e.reject_reason || ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-
-      {tab === 'Bundles' && (
         <table>
-          <thead><tr><th>bundle_sku</th><th>is_bundle</th><th>quota statis</th><th>BOM rows</th><th>stok</th><th>set_by</th></tr></thead>
+          <thead><tr><th>event</th><th>event_id</th><th>HTTP</th><th>signature (HMAC)</th><th>sent_at</th></tr></thead>
           <tbody>
-            {bundles.map((b) => (
-              <tr key={b.bundle_sku}>
-                <td>{b.bundle_sku}</td>
-                <td>{b.is_bundle ? '✅' : '❌'}</td>
-                <td>{b.quota_static?.toLocaleString('id-ID')}</td>
-                <td>{b.bundle_components_rows}</td>
-                <td>{b.stock_available?.toLocaleString('id-ID')}</td>
-                <td>{b.set_by}</td>
+            {events.map((e) => (
+              <tr key={e.id}>
+                <td>{e.event}</td>
+                <td>{e.event_id}</td>
+                <td>{e.http_status}</td>
+                <td><code>{e.signature}</code></td>
+                <td>{e.sent_at}</td>
               </tr>
             ))}
           </tbody>
         </table>
       )}
 
-      {tab === 'Replay' && (
-        <div className="replay">
-          <p>Kirim ulang katalog Jalur A (webhook <code>catalog.updated</code>) ke core/storefront.</p>
-          <button onClick={replay}>Re-push katalog</button>
-          {replayMsg && <p className="replay-msg">{replayMsg}</p>}
-        </div>
+      {tab === 'Bundles' && (
+        <table>
+          <thead><tr><th>bundle_sku</th><th>is_bundle</th><th>BOM rows</th><th>stok (BOM)</th><th>komponen</th></tr></thead>
+          <tbody>
+            {bundles.map((b) => (
+              <tr key={b.bundle_sku}>
+                <td>{b.bundle_sku}</td>
+                <td>{b.is_bundle ? '✅' : '❌'}</td>
+                <td>{b.bom_rows}</td>
+                <td>{b.available_stock?.toLocaleString('id-ID')}</td>
+                <td>{b.components.map((c) => `${c.component_sku}×${c.multiplier}`).join(', ')}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
     </div>
   )
