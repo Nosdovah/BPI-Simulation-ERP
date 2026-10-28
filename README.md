@@ -1,76 +1,79 @@
-# BPI-Simulation-ERP — System ERP (WMS Perpack tiruan)
+# BPI-Simulation-ERP — Replika ERP/WMS Perpack (Octarine)
 
-Replika sistem **ERP/WMS Perpack** untuk simulasi BPI-DMAIC integrasi dengan
-Octarine Webcommerce (proyek *Peningkatan Kinerja Proses Fulfillment Pesanan*).
-Repositori ini memegang **sisi ERP** dari blueprint OSR; storefront + core
-(middleware) dikerjakan di repo terpisah oleh anggota tim lain.
+Replika **API ERP/WMS Perpack** (`octarine-api.perpack.id/v1`) untuk simulasi
+BPI-DMAIC integrasi Octarine Webcommerce ↔ WMS. Repo ini memegang **sisi ERP**;
+storefront + core dikerjakan di repo terpisah oleh tim lain.
 
-## Cakupan
+> 📘 **Tim storefront — baca dulu: [`docs/API_INTEGRATION.md`](docs/API_INTEGRATION.md)**
+> (semua endpoint webhook + payload + contoh kode frontend + curl).
 
-| Komponen | Isi |
+## Live
+
+- **URL**: `https://web-production-e60b55.up.railway.app`
+- **UI replica**: buka URL di atas → tabel Sales Order + Produk + Webhook.
+- **Swagger**: `https://web-production-e60b55.up.railway.app/docs`
+
+## Data (SQLite, tersimpan & di-query via SQL)
+
+| Entitas | Jumlah |
 |---|---|
-| `apps/wms-stub` | ERP (FastAPI :8100) — endpoint katalog, stok, order, state machine, **webhook outbound** |
-| `apps/admin` | osr-admin (Vite+React :3001) — panel monitoring |
-| `db/` | skema SQLite (`schema.sql`) + seeder (`seed.py`) |
-| `scenario/` | `reproduce_baseline.py` — bukti cacat baseline |
-| `data/` | `base_catalog.json` — data publik octarine.co.id |
+| Product group | 302 |
+| Product variant | 3.727 |
+| Bundle (`is_bundle` + `components`) | 3.039 |
+| Sales order (channel WEBSTORE) | 459 |
+| Warehouse | 2 (Bogor, Offline) |
+| Channel | 10 (13 = WEBSTORE) |
 
-Dua jalur data sesuai blueprint v0.2:
+Data nyata diambil dari API Perpack (PII pelanggan ter-anonimkan). Setiap
+perubahan lewat webhook **dismpan permanen di database** (tabel `orders`,
+`product_variants`, `variant_stocks`, `webhook_events`).
 
-- **Jalur A (4.1)** — Katalog & Inventaris: `GET /v1/open/products/*`, `GET /v1/open/stocks`, webhook `catalog.updated`.
-- **Jalur B (4.2)** — Order & Status: `POST /v1/open/sales-order`, `list`, `cancel`, `status`, `process` (baseline 404), webhook `order.status_updated`.
+## Endpoint
 
-## Webhook sebagai jembatan data
+**Webhook jembatan data (untuk storefront):**
 
-ERP mengirim data ke storefront via **webhook outbound** (bukan pull):
+| Method | Path | Fungsi |
+|---|---|---|
+| GET | `/api/webhooks/catalog` | master-data produk untuk storefront |
+| POST | `/api/webhooks/purchase-order` | terima PO → buat order (status `paid`) |
+| POST | `/api/webhooks/wms` | `stock.updated` (ubah stok) · `order.status_changed` (ubah status) |
+| GET | `/api/webhooks/wms` | riwayat webhook (audit, dari DB) |
 
-```
-wms-stub ──POST {CORE_WEBHOOK_URL}/{token}──▶ storefront/core
-          catalog.updated (Jalur A) + order.status_updated (Jalur B)
-```
+**Replika API Perpack (1:1 dengan aslinya):**
 
-Target dikonfigurasi lewat env (`.env`):
+| Method | Path | Fungsi |
+|---|---|---|
+| GET | `/v1/channels` | daftar channel |
+| GET | `/v1/warehouses` | daftar warehouse |
+| GET | `/v1/products/group/page` | master-data/product (grup + varian nested) |
+| GET | `/v1/products/list` | varian produk (flat) |
+| POST | `/v1/orders/page` | outbound/sales (page/length/channel_id) |
 
-```bash
-WEBHOOK_TOKEN=osr-local-token-2026
-CORE_WEBHOOK_URL=http://localhost:8000/webhook/octarine-wms
-OSR_MODE=baseline      # baseline | tobe
-```
+Detail payload + contoh: lihat [`docs/API_INTEGRATION.md`](docs/API_INTEGRATION.md).
 
-`OSR_MODE=baseline` menyalakan seluruh cacat SoW; `tobe` menyalakan perbaikan
-(BOM engine, auto-ack, HMAC, no-regression, tracking 3PL).
-
-## Menjalankan (tanpa Docker)
+## Menjalankan lokal
 
 ```bash
 pip install -r requirements.txt
 
-# 1. seed database (3.696 varian, 7.325 stok, 139 order, 103 event webhook)
+# 1. seed database (membaca data/perpack_seed.json)
 python db/seed.py
 
-# 2. jalankan ERP (auto-push katalog via webhook saat start)
+# 2. jalankan replica (API + UI pada :8100)
 cd apps/wms-stub && uvicorn main:app --port 8100
-
-# 3. panel admin
-cd apps/admin && npm install && npm run dev   # http://localhost:3001
 ```
 
-## Reproduksi cacat baseline
+Buka `http://localhost:8100/` untuk UI replica, atau `http://localhost:8100/docs`.
 
-`python scenario/reproduce_baseline.py` mencetak (cocok persis paper):
+## Deploy
 
-| Metrik | Baseline | Target paper |
-|---|---|---|
-| Phantom stock bundle (Jalur A) | 995 unit | ±995 ✓ |
-| Order macet 'sent' | 82 (59,0%) | 82 (59,0%) ✓ |
-| Macet >2 hari | 21 (15,1%) | 21 (15,1%) ✓ |
-| Completed manual | 100% | 100% ✓ |
-| Webhook valid | 20/103 (19,4%) | 20 (19,4%) ✓ |
-| DPMO → sigma | 805.825 → 0,64 | 805.825 → 0,64 ✓ |
+- **Railway** (FastAPI persisten): `Procfile` → `web: bash start.sh` (auto-seed
+  saat boot pertama, SQLite ephemeral → tiap deploy = kondisi bersih, bagus
+  untuk demo).
+- Push ke `main` → auto-deploy.
 
 ## Catatan
 
-- `db/*.db` dan `node_modules/` hasil generate — tidak di-commit (lihat `.gitignore`).
-- Kontrak payload webhook mengikuti blueprint §6 (referensi acuan `SCOPE OF WORK`).
-- Storefront + core (receiver) berada di repo terpisah — ERP ini cukup mengarahkan
-  `CORE_WEBHOOK_URL` + `WEBHOOK_TOKEN` ke sana.
+- `db/*.db` dan `node_modules/` tidak di-commit (lihat `.gitignore`).
+- Auth replika di **longgarkan** (opsional) supaya demo mudah; kolom token di UI
+  tetap ada bila ingin uji alur autentikasi JWT (Perpack asli: `Authorization: <jwt>` tanpa `Bearer`).
