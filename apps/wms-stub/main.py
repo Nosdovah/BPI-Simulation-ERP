@@ -336,6 +336,75 @@ async def webhook_wms_get(limit: int = 50):
     return env([dict(r) for r in rows])
 
 
+# ============================ Webhook untuk storefront ============================
+
+@app.get("/api/webhooks/catalog")
+async def webhook_catalog(page: int = 1, length: int = 250):
+    """Master-data product untuk ditampilkan di storefront (GET -> data katalog)."""
+    page = max(1, page)
+    length = max(1, min(length, 500))
+    count = q1("SELECT COUNT(*) c FROM product_variants")["c"]
+    rows = q("SELECT id, product_group_id, name, sku, sku_code, alias, sell_price, "
+             "purchase_price, is_bundle FROM product_variants ORDER BY id LIMIT ? OFFSET ?",
+             (length, (page - 1) * length))
+    data = []
+    for r in rows:
+        v = dict(r)
+        v["is_bundle"] = bool(v["is_bundle"])
+        v["components"] = [dict(c) for c in q(
+            "SELECT product_id, component_sku, multiplier_qty FROM variant_components WHERE variant_id=?",
+            (v["id"],))]
+        v["images"] = [im["url"] for im in q(
+            "SELECT url FROM variant_images WHERE variant_id=? LIMIT 1", (v["id"],))]
+        v["stock_available"] = q1(
+            "SELECT COALESCE(SUM(available),0) s FROM variant_stocks WHERE variant_id=?", (v["id"],))["s"]
+        data.append(v)
+    return env(data, pagemeta(page, length, count))
+
+
+@app.post("/api/webhooks/purchase-order")
+async def webhook_purchase_order(body: dict = None):
+    """Terima purchase order baru dari storefront -> buat order di DB (status awal)."""
+    body = body if isinstance(body, dict) else {}
+    ref = (body.get("reference_no") or body.get("order_ref") or body.get("ref")
+           or f"ORD-WEBSTORE-PROD-{int(time.time())}")
+    items = body.get("items") or []
+    if isinstance(items, dict):
+        items = [items]
+    items = [it for it in items if isinstance(it, dict)]
+    product_summary = ", ".join(f"{int(it.get('qty', 1))} {it.get('sku', '')}" for it in items)
+    qty = sum(int(it.get("qty", 1)) for it in items)
+    amount = body.get("amount")
+    if amount is None:
+        amount = sum((int(it.get("qty", 1)) or 1) * (int(it.get("price") or it.get("sell_price") or 0))
+                     for it in items)
+    status = body.get("status") or "paid"
+    chan_name = body.get("channel") or "WEBSTORE"
+    chan_id = body.get("channel_id")
+    if chan_id is None:
+        ch = q1("SELECT id FROM channels WHERE name=?", (chan_name,))
+        chan_id = ch["id"] if ch else 13
+    exist = q1("SELECT id FROM orders WHERE reference_no=?", (ref,))
+    if exist:
+        return env({"applied": False, "note": f"reference_no {ref} sudah ada", "order_id": exist["id"]})
+    c = conn()
+    cur = c.execute(
+        "INSERT INTO orders (reference_no, order_at, created_at, channel_name, channel_id, "
+        "customer_name, customer_phone, customer_email, qty, amount, product_summary, status, "
+        "is_cod, is_fake_order) VALUES (?, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+        (ref, chan_name, chan_id, body.get("customer_name") or "", body.get("customer_phone") or "",
+         body.get("customer_email") or "", qty, int(amount or 0), product_summary, status))
+    oid = cur.lastrowid
+    cur.execute("INSERT INTO webhook_events (event_id, event, payload, applied, effect) VALUES (?,?,?,?,?)",
+                (body.get("event_id") or f"evt-po-{int(time.time() * 1000)}", "purchase-order.created",
+                 json.dumps(body, ensure_ascii=False), 1,
+                 json.dumps({"order_id": oid, "reference_no": ref, "status": status})))
+    c.commit()
+    c.close()
+    return env({"applied": True, "order_id": oid, "reference_no": ref, "status": status,
+                "qty": qty, "amount": int(amount or 0), "product_summary": product_summary})
+
+
 @app.get("/", response_class=HTMLResponse)
 def demo_page():
     index = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
