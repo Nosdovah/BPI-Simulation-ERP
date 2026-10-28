@@ -21,7 +21,7 @@ import sqlite3
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -272,26 +272,8 @@ async def webhook_wms_get():
 
 @app.get("/", response_class=HTMLResponse)
 def demo_page():
-    return """<!doctype html><html lang="id"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Octarine ERP — Webhook Demo</title>
-<style>body{font-family:system-ui,sans-serif;padding:32px;max-width:720px;margin:auto;color:#111}
-code{background:#f3f4f6;padding:2px 6px;border-radius:4px;font-size:13px}
-.card{border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin:16px 0}
-.ok{color:#047857}.badge{background:#dbeafe;color:#1e40af;padding:2px 8px;border-radius:999px;font-size:12px}</style></head>
-<body><h1>Octarine ERP <span class="badge">replica perpack.id</span></h1>
-<p>Endpoint webhook API dipanggil otomatis saat halaman ini <b>load</b>.</p>
-<div class="card"><strong>Webhook:</strong> <code>POST /api/webhooks/wms</code>
-<p id="status">memuat…</p><pre id="resp" style="font-size:12px;background:#f9fafb;padding:8px;border-radius:6px"></pre></div>
-<p>👉 Buka <b>DevTools &rarr; Network</b>, filter <code>webhooks</code> — request <code>POST /api/webhooks/wms</code> terlihat (status 200).</p>
-<script>
-fetch('/api/webhooks/wms',{method:'POST',headers:{'Content-Type':'application/json'},
- body:JSON.stringify({event:'order.status_updated',event_id:'evt-page-load-'+Date.now(),
-  data:{order_ref:'ORD-WEBSTORE-PROD-2731',current_status:'process',updated_by:'SYSTEM'}})})
- .then(r=>r.json()).then(j=>{document.getElementById('status').textContent='✅ webhook terkirim saat page load';
-  document.getElementById('resp').textContent=JSON.stringify(j,null,2)})
- .catch(e=>{document.getElementById('status').textContent='❌ gagal: '+e});
-</script></body></html>"""
+    index = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
+    return FileResponse(index)
 
 
 def _now():
