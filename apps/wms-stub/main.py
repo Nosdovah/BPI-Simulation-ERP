@@ -31,16 +31,40 @@ WMS_DB = os.path.join(BASE, "db", "wms.db")
 
 WEBHOOK_URL = os.environ.get("WEBHOOK_URL", os.environ.get("OSR_WEBHOOK_URL", "http://127.0.0.1:3000/api/webhooks/wms"))
 WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", os.environ.get("OSR_WEBHOOK_HMAC_SECRET", "osr-local-hmac-secret"))
+# Bearer token untuk receiver webstore (opsional; receiver-nya mewajibkan ini).
+WEBHOOK_TOKEN = os.environ.get("WEBHOOK_TOKEN", os.environ.get("OSR_WEBHOOK_TOKEN", ""))
 OSR_MODE = os.environ.get("OSR_MODE", "baseline")
 ZERO_CLICK_SLA_SEC = 5.0
 
 STATUS_FLOW = ["paid", "process", "pick", "packing", "packed", "ready_to_pickup", "sent", "completed"]
 TERMINAL = {"cancelled", "returned", "completed"}
 VALID_STATUS = set(STATUS_FLOW) | TERMINAL
+
+# Enum internal ERP -> enum baku receiver storefront (`lib/webhooks.ts` ORDER_STATUSES).
+STATUS_ENUM_MAP = {
+    "paid": "PAID",
+    "process": "PROCESSING",
+    "pick": "PICKING",
+    "packing": "PROCESSING",
+    "packed": "PACKED",
+    "ready_to_pickup": "HANDOVER_TO_COURIER",
+    "sent": "IN_TRANSIT",
+    "completed": "COMPLETED",
+    "cancelled": "CANCELLED",
+    "returned": "RETURNED",
+}
 FOCAL_BUNDLE = "Sanctum+Noctis-20ml-A1"
 
 app = FastAPI(title="osr-wms (ERP Perpack Simulator) — blueprint v2")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Read-model untuk webstore (`lib/erp/pull.mjs`) — /api/v2/*, sumber SQLite yang sama.
+try:
+    from .compat import router as compat_router
+except ImportError:  # dijalankan langsung sebagai skrip
+    from compat import router as compat_router
+
+app.include_router(compat_router)
 
 
 # ============================ Pydantic v2 ============================
@@ -143,7 +167,8 @@ def _sign(raw_body: bytes) -> str:
 def build_status_payload(order_row, previous_status, new_status):
     return {
         "event_id": event_id("evt_wms_status"),
-        "event": "order.status_updated",
+        # nama event yang di-handle receiver webstore (`lib/webhooks.ts`)
+        "event": "order.status_changed",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "data": {
             "order_ref": order_row["order_ref"],
@@ -151,6 +176,11 @@ def build_status_payload(order_row, previous_status, new_status):
             "channel": order_row["channel"],
             "previous_status": previous_status,
             "current_status": new_status,
+            # alias yang dibaca receiver webstore (enum baku huruf besar)
+            "ref": order_row["order_ref"],
+            "status": STATUS_ENUM_MAP.get(new_status, new_status.upper()),
+            "tracking_no": order_row["tracking_number"],
+            "actor": order_row["actor_last"] or "SYSTEM",
             "courier": {
                 "name": order_row["courier_name"],
                 "service": order_row["courier_service"],
@@ -164,7 +194,17 @@ def build_status_payload(order_row, previous_status, new_status):
 def post_webhook(payload, lane="4.2"):
     raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
     sig = _sign(raw)
-    headers = {"Content-Type": "application/json", "X-Perpack-Signature": f"sha256={sig}"}
+    headers = {
+        "Content-Type": "application/json",
+        # kontrak v2 (dokumen blueprint)
+        "X-Perpack-Signature": f"sha256={sig}",
+        # alias yang dibaca receiver webstore (`lib/webhooks.ts`)
+        "X-OSR-Signature": f"sha256={sig}",
+    }
+    if WEBHOOK_TOKEN:
+        headers["Authorization"] = f"Bearer {WEBHOOK_TOKEN}"
+    if payload.get("event_id"):
+        headers["Idempotency-Key"] = str(payload["event_id"])
     try:
         r = httpx.post(WEBHOOK_URL, content=raw, headers=headers, timeout=20)
         status, ok = r.status_code, r.status_code in (200, 202, 204)
