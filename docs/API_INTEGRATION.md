@@ -9,6 +9,29 @@ di-query via SQL; setiap webhook yang masuk **mengubah data di database**.
 
 ---
 
+## ⚠️ PENEGASAN KONTRAK RESMI (WAJIB dibaca storefront)
+
+- **Kontrak resmi** untuk storefront = **replika Perpack** → endpoint
+  `/api/webhooks/*` (webhook bridge) + `/v1/*` (replika API Perpack 1:1).
+- **Skema/kontrak blueprint-v2 SUDAH DITINGGALKAN** — `/api/v2/*`, `compat.py`,
+  tabel `sku_bom` / `bundle_quota_manual`, dan engine `/api/v1` lama **jangan
+  dipakai** (basisnya skema lama yang sudah diganti).
+- **AS-IS** = replika sistem Perpack nyata (data + perilaku asli).
+  **TO-BE** = simulasi perbaikan yang dibangun di atas kontrak yang sama.
+
+Storefront cukup memakai **4 endpoint inti**:
+
+1. `GET  /api/webhooks/catalog` — tarik master-data produk.
+2. `POST /api/webhooks/purchase-order` — kirim order (checkout).
+3. `POST /api/webhooks/wms` — update status order / stok.
+4. `GET  /v1/orders/page` — baca balik status order.
+
+> Migrasi dari kontrak lama: `/api/v2/master/products` → `/api/webhooks/catalog`;
+> `/api/v2/inventory/balances` → hitung dari `stock_available` di catalog;
+> `order.status_changed` → tetap `POST /api/webhooks/wms`.
+
+---
+
 ## 1. Base URL & Auth
 
 | Lingkungan | URL |
