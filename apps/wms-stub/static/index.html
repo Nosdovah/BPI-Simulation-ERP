@@ -100,12 +100,30 @@
     <div class="kpi" id="kpis"></div>
 
     <ul style="display:flex;gap:6px;list-style:none;padding:0;margin:0 0 14px">
-      <li><button id="tabOrders">Sales Order</button></li>
+      <li><button id="tabTobe">✨ TO-BE (BOM)</button></li>
+      <li><button id="tabOrders" class="ghost">Sales Order</button></li>
       <li><button id="tabProducts" class="ghost">Produk</button></li>
       <li><button id="tabWebhook" class="ghost">Webhook</button></li>
     </ul>
 
-    <section id="tab-orders">
+    <section id="tab-tobe">
+      <div class="card">
+        <div class="toolbar">
+          <span class="muted">TO-BE: stok bundle dihitung dari komponen — <code>min(⌊stok/multiplier⌋)</code> — vs angka statis AS-IS yang menimbulkan phantom.</span>
+          <button id="loadToBe">Muat</button>
+          <span id="tobeMeta" class="muted"></span>
+        </div>
+        <div class="kpi" id="tobeKpis"></div>
+        <div class="tblwrap">
+          <table id="tobeTable">
+            <thead><tr><th>SKU bundle</th><th>komponen</th><th>AS-IS (statis)</th><th>TO-BE (BOM)</th><th>Δ phantom</th><th>status</th></tr></thead>
+            <tbody><tr><td colspan="6" class="muted">Memuat…</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section id="tab-orders" style="display:none">
       <div class="card">
         <div class="toolbar">
           <label class="muted">Channel:</label>
@@ -235,25 +253,55 @@ async function loadProducts(){
 }
 $('#loadProducts').onclick = loadProducts;
 
+async function loadToBe(){
+  try{
+    const j = await api('/api/to-be/bundle-stock?limit=150');
+    const d = j.data, s = d.summary;
+    $('#tobeMeta').textContent = `${s.total_bundles} bundle`;
+    $('#tobeKpis').innerHTML = `
+      <div class="box"><div class="n">${s.total_bundles.toLocaleString('id-ID')}</div><div class="l">Total bundle</div></div>
+      <div class="box"><div class="n" style="color:#b91c1c">${s.oversell}</div><div class="l">Oversell (stok &gt; komponen)</div></div>
+      <div class="box"><div class="n" style="color:#a16207">${s.understate}</div><div class="l">Understate (stok &lt; komponen)</div></div>
+      <div class="box"><div class="n" style="color:var(--green-d)">${s.matched}</div><div class="l">Cocok (tanpa phantom)</div></div>`;
+    const rows = d.bundles.map(b=>{
+      const comp = b.components.map(c=>`${c.component_sku}×${c.multiplier}`).join(', ');
+      const tag = b.phantom > 0 ? '<span class="st pending">oversell</span>'
+                : b.phantom < 0 ? '<span class="st sent">understate</span>'
+                : '<span class="st completed">cocok</span>';
+      const col = b.phantom > 0 ? '#b91c1c' : b.phantom < 0 ? '#a16207' : '#276749';
+      return `<tr>
+        <td>${b.sku}</td><td class="muted">${comp}</td>
+        <td>${b.stock_as_is.toLocaleString('id-ID')}</td>
+        <td>${b.stock_to_be.toLocaleString('id-ID')}</td>
+        <td style="color:${col};font-weight:600">${b.phantom>0?'+':''}${b.phantom.toLocaleString('id-ID')}</td>
+        <td>${tag}</td></tr>`;
+    }).join('');
+    $('#tobeTable tbody').innerHTML = rows;
+  }catch(e){ $('#tobeTable tbody').innerHTML = `<tr><td colspan="6" class="muted">Error: ${e.message}</td></tr>`; }
+}
+$('#loadToBe').onclick = loadToBe;
+
 fetch('/api/webhooks/wms',{method:'POST',headers:{'Content-Type':'application/json'},
   body:JSON.stringify({event:'ping',event_id:'evt-page-load-'+Date.now()})})
   .then(r=>r.json()).then(j=>{ $('#resp').textContent = JSON.stringify(j,null,2); })
   .catch(e=>{ $('#resp').textContent = 'gagal: '+e; });
 
 function showTab(t){
-  ['tab-orders','tab-products','tab-webhook'].forEach(id=>$('#'+id).style.display='none');
+  ['tab-tobe','tab-orders','tab-products','tab-webhook'].forEach(id=>$('#'+id).style.display='none');
   $('#tab-'+t).style.display='';
   const target = 'tab'+t[0].toUpperCase()+t.slice(1);
-  ['tabOrders','tabProducts','tabWebhook'].forEach(id=>{ $('#'+id).className = (id===target)?'':'ghost'; });
+  ['tabTobe','tabOrders','tabProducts','tabWebhook'].forEach(id=>{ $('#'+id).className = (id===target)?'':'ghost'; });
+  if(t==='tobe') loadToBe();
   if(t==='orders') loadOrders();
   if(t==='products') loadProducts();
 }
+$('#tabTobe').onclick = ()=>showTab('tobe');
 $('#tabOrders').onclick = ()=>showTab('orders');
 $('#tabProducts').onclick = ()=>showTab('products');
 $('#tabWebhook').onclick = ()=>showTab('webhook');
 
 loadChannels();
-loadOrders();
+loadToBe();
 </script>
 </body>
 </html>
