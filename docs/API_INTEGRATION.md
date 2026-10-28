@@ -11,13 +11,29 @@ di-query via SQL; setiap webhook yang masuk **mengubah data di database**.
 
 ## ⚠️ PENEGASAN KONTRAK RESMI (WAJIB dibaca storefront)
 
-- **Kontrak resmi** untuk storefront = **replika Perpack** → endpoint
-  `/api/webhooks/*` (webhook bridge) + `/v1/*` (replika API Perpack 1:1).
+> **Proyek storefront WAJIB mengikuti FORMAT DATA ERP (Perpack).**
+> ERP adalah **sumber kebenaran (single source of truth)**. Storefront tidak
+> mendefinisikan format datanya sendiri — **field, envelope, dan enum harus
+> mengikuti ERP apa adanya**.
+
+**FORMAT DATA ERP yang wajib diikuti (jangan diganti / di-rename):**
+
+| Aspek | Aturan |
+|---|---|
+| Envelope | `{ "code", "msg": {"id","en"}, "data", "metadata" }` — berlaku di SEMUA endpoint |
+| Field order | nama field mengikuti ERP: `reference_no`, `order_at`, `deadline_at`, `customer_name`, `warehouse_name`, `qty`, `amount`, `channel_name`, `courier`, `status`, `product_summary`, `sku`, `sell_price`, `is_bundle`, `components`, `stock_available` |
+| Status enum | huruf kecil: `paid · process · picking · packing · packed · ready_to_pickup · sent · completed · cancelled · returned` |
+| Kunci order | `reference_no` (string unik), BUKAN `id` numerik |
+| Harga | integer Rupiah (tanpa titik), mis. `98000` |
+
+- **Kontrak resmi** = **replika Perpack** → endpoint `/api/webhooks/*` + `/v1/*`.
 - **Skema/kontrak blueprint-v2 SUDAH DITINGGALKAN** — `/api/v2/*`, `compat.py`,
   tabel `sku_bom` / `bundle_quota_manual`, dan engine `/api/v1` lama **jangan
   dipakai** (basisnya skema lama yang sudah diganti).
 - **AS-IS** = replika sistem Perpack nyata (data + perilaku asli).
   **TO-BE** = simulasi perbaikan yang dibangun di atas kontrak yang sama.
+- Kalau ada **mismatch** field/format antara storefront dan ERP → yang diubah
+  adalah **storefront**, bukan ERP.
 
 Storefront cukup memakai **4 endpoint inti**:
 
