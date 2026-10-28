@@ -127,6 +127,16 @@ CREATE TABLE IF NOT EXISTS orders (
   updated_at                TEXT
 );
 
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id    TEXT,
+  event       TEXT,
+  payload     TEXT,
+  applied     INTEGER DEFAULT 0,
+  effect      TEXT,
+  received_at TEXT DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_variants_group ON product_variants(product_group_id);
 CREATE INDEX IF NOT EXISTS idx_components_variant ON variant_components(variant_id);
 CREATE INDEX IF NOT EXISTS idx_stocks_variant ON variant_stocks(variant_id);

@@ -17,6 +17,7 @@ import json
 import math
 import os
 import sqlite3
+import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import StarletteHTTPException
@@ -251,37 +252,94 @@ def orders_page(body: OrdersPage, _=Depends(require_auth)):
     return env(data, pagemeta(page, length, count))
 
 
-# ============================ Webhook API (jembatan data ERP <-> storefront) ===
+# ============================ Webhook API (mutasi DB via query) ===
 
-_webhook_log = []
+
+def apply_stock_update(data):
+    """stock.updated -> kurangi available stok varian (delta = unit terjual)."""
+    sku = data.get("materialCode") or data.get("material_code") or data.get("sku") or data.get("component_sku")
+    delta = data.get("delta")
+    if delta is None:
+        delta = data.get("qty_sold") or data.get("quantity_sold") or data.get("quantity")
+    if not sku or delta is None:
+        return {"applied": False, "note": "field wajib: sku/materialCode + delta"}
+    try:
+        delta = int(delta)
+    except (TypeError, ValueError):
+        return {"applied": False, "note": "delta bukan angka"}
+    v = q1("SELECT id, sku, alias FROM product_variants WHERE sku=? OR alias=?", (sku, sku))
+    if not v:
+        return {"applied": False, "note": f"SKU {sku} tidak ditemukan di product_variants"}
+    c = conn()
+    cur = c.cursor()
+    for r in cur.execute("SELECT variant_id, warehouse_id, available FROM variant_stocks "
+                         "WHERE variant_id=? AND available>0 ORDER BY available DESC", (v["id"],)).fetchall():
+        if delta <= 0:
+            break
+        take = min(r["available"], delta)
+        cur.execute("UPDATE variant_stocks SET available=available-? WHERE variant_id=? AND warehouse_id=?",
+                    (take, v["id"], r["warehouse_id"]))
+        delta -= take
+    remaining = cur.execute("SELECT COALESCE(SUM(available),0) s FROM variant_stocks WHERE variant_id=?",
+                            (v["id"],)).fetchone()["s"]
+    c.commit()
+    c.close()
+    return {"applied": True, "sku": v["sku"], "variant_id": v["id"], "sisa_stok_total": remaining}
+
+
+def apply_order_status(data):
+    """order.status_changed/updated -> ubah status order di DB."""
+    ref = data.get("ref") or data.get("reference_no") or data.get("order_ref")
+    status = data.get("status") or data.get("current_status") or data.get("to_status")
+    if not ref or not status:
+        return {"applied": False, "note": "field wajib: ref/reference_no + status"}
+    c = conn()
+    cur = c.execute("UPDATE orders SET status=?, updated_at=datetime('now') WHERE reference_no=?",
+                    (status, ref))
+    n = cur.rowcount
+    tn = data.get("tracking_no") or data.get("tracking_number") or data.get("awb")
+    if tn:
+        c.execute("UPDATE orders SET awb=? WHERE reference_no=?", (tn, ref))
+    c.commit()
+    c.close()
+    return {"applied": n > 0, "reference_no": ref, "status": status, "rows_updated": n}
 
 
 @app.post("/api/webhooks/wms")
 async def webhook_wms(body: dict = None):
-    """Receiver webhook ERP -> storefront/core (kontrak: event + data)."""
     body = body if isinstance(body, dict) else {}
-    event_id = body.get("event_id") or f"evt-{len(_webhook_log) + 1}"
-    _webhook_log.append({"event_id": event_id, "event": body.get("event"), "at": _now()})
-    return env({"applied": True, "event": body.get("event"), "event_id": event_id,
-                "received_total": len(_webhook_log)})
+    event = body.get("event", "")
+    data = body.get("data") or {}
+    event_id = body.get("event_id") or f"evt-{int(time.time() * 1000)}"
+    if event in ("stock.updated", "inventory.updated"):
+        effect = apply_stock_update(data)
+    elif event in ("order.status_changed", "order.status_updated", "order.updated"):
+        effect = apply_order_status(data)
+    else:
+        effect = {"applied": False, "note": f"event {event!r} diterima (ping/unknown) — tanpa mutasi DB"}
+    c = conn()
+    cur = c.execute("INSERT INTO webhook_events (event_id, event, payload, applied, effect) "
+                    "VALUES (?,?,?,?,?)",
+                    (event_id, event, json.dumps(body, ensure_ascii=False),
+                     1 if effect.get("applied") else 0, json.dumps(effect, ensure_ascii=False)))
+    total = cur.execute("SELECT COUNT(*) c FROM webhook_events").fetchone()["c"]
+    c.commit()
+    c.close()
+    return env({"applied": bool(effect.get("applied")), "event": event, "event_id": event_id,
+                "effect": effect, "total_events": total})
 
 
 @app.get("/api/webhooks/wms")
-async def webhook_wms_get():
-    """GET untuk page-load: memastikan path webhook terlihat di Network (200)."""
-    return env({"applied": True, "event": "ping", "received_total": len(_webhook_log),
-                "note": "webhook endpoint aktif — path ini terlihat di Network dev tools"})
+async def webhook_wms_get(limit: int = 50):
+    rows = q("SELECT id, event_id, event, applied, effect, received_at FROM webhook_events "
+             "ORDER BY id DESC LIMIT ?", (limit,))
+    return env([dict(r) for r in rows])
 
 
 @app.get("/", response_class=HTMLResponse)
 def demo_page():
     index = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
     return FileResponse(index)
-
-
-def _now():
-    import datetime
-    return datetime.datetime.now().isoformat()
 
 
 if __name__ == "__main__":
