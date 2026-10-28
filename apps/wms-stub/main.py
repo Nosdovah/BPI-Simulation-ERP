@@ -13,12 +13,15 @@ diverifikasi (replica; tidak memegang secret produksi). Tanpa auth -> 401.
 Envelope: {"code":200,"msg":{"id":"Sukses","en":"Success"},"data":...,"metadata":{...}}
 """
 import base64
+import hashlib
+import hmac as hm
 import json
 import math
 import os
 import sqlite3
 import time
 
+import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -28,8 +31,42 @@ from pydantic import BaseModel
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WMS_DB = os.path.join(BASE, "db", "wms.db")
 
+WEBHOOK_URL = os.environ.get("WEBHOOK_URL", os.environ.get("OSR_WEBHOOK_URL", "http://127.0.0.1:3000/api/webhooks/wms"))
+WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", os.environ.get("OSR_WEBHOOK_HMAC_SECRET", "osr-local-hmac-secret"))
+# Bearer token untuk receiver webstore (opsional; receiver-nya mewajibkan ini).
+WEBHOOK_TOKEN = os.environ.get("WEBHOOK_TOKEN", os.environ.get("OSR_WEBHOOK_TOKEN", ""))
+OSR_MODE = os.environ.get("OSR_MODE", "baseline")
+ZERO_CLICK_SLA_SEC = 5.0
+
+STATUS_FLOW = ["paid", "process", "pick", "packing", "packed", "ready_to_pickup", "sent", "completed"]
+TERMINAL = {"cancelled", "returned", "completed"}
+VALID_STATUS = set(STATUS_FLOW) | TERMINAL
+
+# Enum internal ERP -> enum baku receiver storefront (`lib/webhooks.ts` ORDER_STATUSES).
+STATUS_ENUM_MAP = {
+    "paid": "PAID",
+    "process": "PROCESSING",
+    "pick": "PICKING",
+    "packing": "PROCESSING",
+    "packed": "PACKED",
+    "ready_to_pickup": "HANDOVER_TO_COURIER",
+    "sent": "IN_TRANSIT",
+    "completed": "COMPLETED",
+    "cancelled": "CANCELLED",
+    "returned": "RETURNED",
+}
+FOCAL_BUNDLE = "Sanctum+Noctis-20ml-A1"
+
 app = FastAPI(title="Perpack WMS (Octarine) — replica", version="1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+# Read-model untuk webstore (`lib/erp/pull.mjs`) — /api/v2/*, sumber SQLite yang sama.
+try:
+    from .compat import router as compat_router
+except ImportError:  # dijalankan langsung sebagai skrip
+    from compat import router as compat_router
+
+app.include_router(compat_router)
 
 
 @app.exception_handler(StarletteHTTPException)
@@ -79,6 +116,11 @@ def require_auth(authorization: str = Header(None)):
 
 # ============================ DB ============================
 
+def event_id(prefix="evt"):
+    """ID idempoten per pengiriman webhook."""
+    return f"{prefix}_{int(time.time() * 1000)}_{os.urandom(4).hex()}"
+
+
 def conn():
     c = sqlite3.connect(WMS_DB)
     c.row_factory = sqlite3.Row
@@ -110,6 +152,125 @@ def pagemeta(page, length, count):
 
 
 # ============================ Master data ============================
+
+# ============================ Modul A — BOM engine ============================
+
+def component_stock(cur, sku):
+    row = cur.execute("SELECT COALESCE(SUM(available),0) s FROM stocks WHERE variant_sku=?", (sku,)).fetchone()
+    return row["s"]
+
+
+def deduct_stock(cur, sku, qty):
+    """Potong qty dari stok (distributed, greedy dari gudang terbanyak)."""
+    rows = cur.execute("SELECT variant_sku, warehouse_id, available FROM stocks "
+                       "WHERE variant_sku=? AND available > 0 ORDER BY available DESC", (sku,)).fetchall()
+    remaining = qty
+    for r in rows:
+        if remaining <= 0:
+            break
+        take = min(r["available"], remaining)
+        cur.execute("UPDATE stocks SET available = available - ?, updated_at=datetime('now') "
+                    "WHERE variant_sku=? AND warehouse_id=?",
+                    (take, sku, r["warehouse_id"]))
+        remaining -= take
+    if remaining > 0:
+        raise HTTPException(409, f"stok {sku} tidak cukup (kurang {remaining})")
+
+
+def bom_available(sku):
+    """Stok bundle = min(floor(stok_komponen / multiplier)). Non-bundle = stok fisik."""
+    c = conn()
+    cur = c.cursor()
+    v = cur.execute("SELECT sku, name, gender, price_idr, is_bundle FROM variants WHERE sku=?", (sku,)).fetchone()
+    if not v:
+        c.close()
+        return None
+    if not bool(v["is_bundle"]):
+        out = {"sku": sku, "name": v["name"], "is_bundle": False,
+               "available_stock": component_stock(cur, sku), "components": []}
+        c.close()
+        return out
+    comps = cur.execute("SELECT component_sku, multiplier_qty FROM sku_bom WHERE bundle_sku=?", (sku,)).fetchall()
+    components = []
+    for comp in comps:
+        stk = component_stock(cur, comp["component_sku"])
+        components.append({"component_sku": comp["component_sku"], "stock_available": stk,
+                           "multiplier": comp["multiplier_qty"]})
+    c.close()
+    if not components:
+        return {"sku": sku, "name": v["name"], "is_bundle": True, "available_stock": 0, "components": []}
+    avail = min(stk // comp["multiplier"] for comp in components for stk in [comp["stock_available"]])
+    return {"sku": sku, "name": v["name"], "is_bundle": True, "available_stock": avail, "components": components}
+
+
+# ============================ Modul C — HMAC + webhook ============================
+
+def _sign(raw_body: bytes) -> str:
+    return hm.new(WEBHOOK_SECRET.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
+
+
+def build_status_payload(order_row, previous_status, new_status):
+    return {
+        "event_id": event_id("evt_wms_status"),
+        # nama event yang di-handle receiver webstore (`lib/webhooks.ts`)
+        "event": "order.status_changed",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "data": {
+            "order_ref": order_row["order_ref"],
+            "wms_order_id": order_row["wms_order_id"],
+            "channel": order_row["channel"],
+            "previous_status": previous_status,
+            "current_status": new_status,
+            # alias yang dibaca receiver webstore (enum baku huruf besar)
+            "ref": order_row["order_ref"],
+            "status": STATUS_ENUM_MAP.get(new_status, new_status.upper()),
+            "tracking_no": order_row["tracking_number"],
+            "actor": order_row["actor_last"] or "SYSTEM",
+            "courier": {
+                "name": order_row["courier_name"],
+                "service": order_row["courier_service"],
+                "tracking_number": order_row["tracking_number"],
+            },
+            "updated_by": order_row["actor_last"] or "SYSTEM",
+        },
+    }
+
+
+def post_webhook(payload, lane="4.2"):
+    raw = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    sig = _sign(raw)
+    headers = {
+        "Content-Type": "application/json",
+        # kontrak v2 (dokumen blueprint)
+        "X-Perpack-Signature": f"sha256={sig}",
+        # alias yang dibaca receiver webstore (`lib/webhooks.ts`)
+        "X-OSR-Signature": f"sha256={sig}",
+    }
+    if WEBHOOK_TOKEN:
+        headers["Authorization"] = f"Bearer {WEBHOOK_TOKEN}"
+    if payload.get("event_id"):
+        headers["Idempotency-Key"] = str(payload["event_id"])
+    try:
+        r = httpx.post(WEBHOOK_URL, content=raw, headers=headers, timeout=20)
+        status, ok = r.status_code, r.status_code in (200, 202, 204)
+    except Exception:
+        status, ok = 0, False
+    c = conn()
+    c.execute("INSERT INTO webhook_delivery_log (event_id,event,lane,attempt,http_status,signature,sent_at) "
+              "VALUES (?,?,?,?,?,?,datetime('now'))",
+              (payload.get("event_id"), payload.get("event"), lane, 1, status, f"sha256={sig[:12]}\u2026"))
+    c.commit()
+    c.close()
+    return status, ok
+
+
+def dispatch_status_webhook(order_row, previous_status, new_status):
+    payload = build_status_payload(order_row, previous_status, new_status)
+    post_webhook(payload, lane="4.2")
+    return payload
+
+
+# ============================ Modul A — endpoint ============================
 
 @app.get("/healthz")
 def healthz():
