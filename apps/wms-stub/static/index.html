@@ -47,7 +47,7 @@
 
 <main>
   <div class="card toolbar">
-    <input id="token" type="text" placeholder="Tempel JWT (Authorization, tanpa Bearer)">
+    <input id="token" type="text" placeholder="Token opsional (untuk uji autentikasi — boleh kosong)">
     <button id="saveToken">Simpan token</button>
     <button id="clearToken" class="danger">Hapus</button>
     <span id="authState" class="muted"></span>
@@ -119,7 +119,7 @@ function authHeaders(){
   return {'Authorization': token, 'Content-Type':'application/json'};
 }
 function updateAuthState(){
-  $('#authState').textContent = token ? '✅ token tersimpan' : '⚠️ belum ada token';
+  $('#authState').textContent = token ? '✅ token tersimpan' : '✅ mode demo (tanpa token)';
 }
 updateAuthState();
 
@@ -135,7 +135,6 @@ async function api(path, opts={}){
 
 // ---- channels ----
 async function loadChannels(){
-  if(!token) return;
   try{
     const j = await api('/v1/channels');
     const sel = $('#channelSel');
@@ -146,7 +145,6 @@ async function loadChannels(){
 
 // ---- orders ----
 async function loadOrders(){
-  if(!token){ alert('Tempel token dulu lalu Simpan.'); return; }
   channelId = $('#channelSel').value; length = +$('#lengthSel').value;
   const body = {page, length};
   if(channelId !== '') body.channel_id = +channelId;
@@ -174,7 +172,6 @@ $('#channelSel').onchange = () => { page=1; loadOrders(); };
 
 // ---- products ----
 async function loadProducts(){
-  if(!token){ alert('Tempel token dulu lalu Simpan.'); return; }
   const q = encodeURIComponent($('#productSearch').value.trim());
   try{
     const j = await api('/v1/products/group/page?page=1&length=100' + (q?`&search=${q}`:''));
@@ -215,7 +212,8 @@ document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>{
 });
 
 // init
-if(token){ loadChannels(); loadOrders(); }
+loadChannels();
+loadOrders();
 </script>
 </body>
 </html>

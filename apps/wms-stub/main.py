@@ -63,13 +63,16 @@ def decode_jwt(auth: str):
 
 
 def require_auth(authorization: str = Header(None)):
+    """Autentikasi opsional untuk demo.
+
+    Perpack produksi MENOLAK tanpa token (401). Replica ini (simulator untuk
+    tugas/demo) sengaja MELONGGARKAN-nya: tanpa token tetap bisa akses sebagai
+    guest/tamu, supaya data langsung terlihat tanpa repot tempel token.
+    Token tetap diterima bila disertakan (klaim di-decode untuk konteks).
+    """
     claims = decode_jwt(authorization)
     if not claims:
-        raise HTTPException(status_code=401, detail={
-            "code": 401,
-            "msg": {"id": "tidak memiliki akses", "en": "you don't have permission to access"},
-            "data": None,
-        })
+        return {"id": 0, "client_id": 0, "is_guest": True, "warehouse_id": 0}
     return claims
 
 
