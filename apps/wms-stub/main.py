@@ -408,40 +408,43 @@ async def webhook_purchase_order(body: dict = None):
 # ============================ TO-BE — BOM virtual kitting ============================
 
 
-def bundle_to_be_stock(sku):
-    """TO-BE: stok bundle = min(floor(stok_komponen / multiplier)).
-    AS-IS: stok bundle = angka statis di DB (penyebab phantom/overselling)."""
-    v = q1("SELECT id, sku, alias, is_bundle FROM product_variants WHERE sku=? OR alias=?", (sku, sku))
-    if not v or not v["is_bundle"]:
-        return None
-    comps = q("SELECT product_id, component_sku, multiplier_qty FROM variant_components "
-              "WHERE variant_id=?", (v["id"],))
-    if not comps:
-        return {"sku": v["sku"], "is_bundle": True, "stock_as_is": 0, "stock_to_be": 0,
-                "phantom": 0, "components": []}
-    detail, to_be = [], None
-    for c in comps:
-        comp_avail = q1("SELECT COALESCE(SUM(available),0) s FROM variant_stocks WHERE variant_id=?",
-                        (c["product_id"],))["s"]
-        detail.append({"component_sku": c["component_sku"], "multiplier": c["multiplier_qty"],
-                       "stock": comp_avail})
-        units = comp_avail // c["multiplier_qty"] if c["multiplier_qty"] else comp_avail
-        to_be = units if to_be is None else min(to_be, units)
-    as_is = q1("SELECT COALESCE(SUM(available),0) s FROM variant_stocks WHERE variant_id=?", (v["id"],))["s"]
-    to_be = to_be or 0
-    return {"sku": v["sku"], "is_bundle": True, "stock_as_is": as_is, "stock_to_be": to_be,
-            "phantom": as_is - to_be, "components": detail}
+def _load_bundle_bom():
+    """Bulk-load stok + komponen bundle dalam 3 query (bukan per-bundle)."""
+    c = conn()
+    cur = c.cursor()
+    stocks = {r["variant_id"]: r["s"] for r in cur.execute(
+        "SELECT variant_id, COALESCE(SUM(available),0) s FROM variant_stocks GROUP BY variant_id")}
+    comps = {}
+    for r in cur.execute("SELECT variant_id, product_id, component_sku, multiplier_qty FROM variant_components"):
+        comps.setdefault(r["variant_id"], []).append(
+            (r["product_id"], r["component_sku"], r["multiplier_qty"]))
+    bundles = [(r["id"], r["sku"]) for r in cur.execute(
+        "SELECT id, sku FROM product_variants WHERE is_bundle=1")]
+    c.close()
+    return stocks, comps, bundles
 
 
 @app.get("/api/to-be/bundle-stock")
 def to_be_bundle_stock(sku: str = None, limit: int = 200):
-    """TO-BE: hitung ulang stok bundle dari BOM & bandingkan dengan AS-IS (phantom)."""
-    if sku:
-        r = bundle_to_be_stock(sku)
-        return env(r if r else {"sku": sku, "note": "bukan bundle / tidak ditemukan"})
-    skus = [r["sku"] for r in q("SELECT sku FROM product_variants WHERE is_bundle=1")]
-    out = [r for r in (bundle_to_be_stock(s) for s in skus) if r]
+    """TO-BE: hitung ulang stok bundle dari BOM (min komponen) vs AS-IS statis (phantom)."""
+    stocks, comps, bundles = _load_bundle_bom()
+    out = []
+    for bid, bsku in bundles:
+        cs = comps.get(bid, [])
+        as_is = stocks.get(bid, 0)
+        detail, to_be = [], None
+        for pid, csku, mult in cs:
+            sa = stocks.get(pid, 0)
+            detail.append({"component_sku": csku, "multiplier": mult, "stock": sa})
+            units = sa // mult if mult else sa
+            to_be = units if to_be is None else min(to_be, units)
+        to_be = to_be or 0
+        out.append({"sku": bsku, "is_bundle": True, "stock_as_is": as_is,
+                    "stock_to_be": to_be, "phantom": as_is - to_be, "components": detail})
     out.sort(key=lambda x: abs(x["phantom"]), reverse=True)
+    if sku:
+        hit = next((b for b in out if b["sku"] == sku), None)
+        return env(hit if hit else {"sku": sku, "note": "bukan bundle / tidak ditemukan"})
     oversell = sum(1 for b in out if b["phantom"] > 0)   # stok statis > kapasitas komponen
     understate = sum(1 for b in out if b["phantom"] < 0)  # stok statis < kapasitas (rugi penjualan)
     matched = sum(1 for b in out if b["phantom"] == 0)
