@@ -455,6 +455,26 @@ def to_be_bundle_stock(sku: str = None, limit: int = 200):
     })
 
 
+@app.get("/api/to-be/sales-summary")
+def sales_summary():
+    """KPI outbound/sales ala Perpack (Sales Order + Sales Product per status)."""
+    rows = q("SELECT status, COUNT(*) c, COALESCE(SUM(qty),0) q FROM orders GROUP BY status")
+    by = {r["status"]: {"order": r["c"], "qty": r["q"]} for r in rows}
+    BUCKETS = {
+        "on_process": ("paid", "process", "processing"),
+        "on_picking": ("pick", "picking"),
+        "on_packing": ("packing", "pack"),
+        "packed": ("packed",),
+    }
+    def agg(field):
+        return {k: sum(by.get(s, {}).get(field, 0) for s in grp) for k, grp in BUCKETS.items()}
+    return env({
+        "sales_order": agg("order"),
+        "sales_product": agg("qty"),
+        "total_orders": sum(v["order"] for v in by.values()),
+    })
+
+
 @app.get("/", response_class=HTMLResponse)
 def demo_page():
     index = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")

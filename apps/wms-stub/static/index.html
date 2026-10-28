@@ -3,301 +3,252 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Octarine WMS — ERP Replica (Perpack)</title>
+<title>Octarine — Fulfillment Portal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root{
-    --green:#2f855a; --green-d:#276749; --green-50:#e6f6ef;
-    --bg:#f7fafc; --card:#fff; --line:#e2e8f0; --ink:#1a202c; --mut:#718096;
+    --navy:#163A50; --navy-2:#1E4A63; --green:#2f855a; --green-50:#e6f6ef; --teal:#2C7A7B;
+    --line:#e2e8f0; --ink:#1a202c; --mut:#64748b;
   }
   *{box-sizing:border-box}
-  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
-       background:var(--bg);color:var(--ink);font-size:14px}
-  .topbar{display:flex;align-items:center;gap:12px;background:var(--green-d);color:#fff;
-          padding:10px 20px;box-shadow:0 1px 3px rgba(0,0,0,.15)}
-  .brand{display:flex;align-items:center;gap:10px;font-weight:700;font-size:16px}
-  .logo{width:30px;height:30px;border-radius:7px;background:#fff;display:flex;align-items:center;
-        justify-content:center;font-weight:800;color:var(--green-d)}
-  .topbar .sub{font-size:12px;color:#c6f6d5;font-weight:500}
-  .asmode{margin-left:auto;display:flex;gap:8px}
-  .asmode .pill{background:rgba(255,255,255,.16);color:#fff;border:none}
-  .wrap{display:flex;min-height:calc(100vh - 50px)}
-  .side{width:220px;background:var(--card);border-right:1px solid var(--line);padding:12px 0;flex-shrink:0}
-  .side .grp{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--mut);padding:10px 18px 4px}
-  .side a{display:flex;align-items:center;gap:9px;padding:8px 18px;color:var(--ink);text-decoration:none;
-          border-left:3px solid transparent;font-size:13.5px}
-  .side a.active{background:var(--green-50);border-left-color:var(--green);color:var(--green-d);font-weight:600}
-  .side a:not(.active):hover{background:#f1f5f9}
-  .main{flex:1;padding:20px;min-width:0}
-  .crumb{color:var(--mut);font-size:12.5px;margin-bottom:10px}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:14px;
-        box-shadow:0 1px 2px rgba(0,0,0,.04)}
-  .toolbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
-  input,select,button{font:inherit;padding:8px 11px;border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink)}
-  input[type=text]{flex:1;min-width:230px}
-  button{background:var(--green);color:#fff;border-color:var(--green);cursor:pointer;font-weight:600}
-  button.ghost{background:#fff;color:var(--green);border-color:var(--line)}
-  button.danger{background:#fff;color:#b91c1c;border-color:var(--line)}
-  .tblwrap{overflow:auto;max-height:560px;border:1px solid var(--line);border-radius:8px}
-  table{width:100%;border-collapse:collapse;font-size:12.5px}
-  th{position:sticky;top:0;background:#f9fafb;color:var(--mut);text-align:left;font-weight:600;
-     padding:9px 11px;border-bottom:1px solid var(--line);white-space:nowrap}
-  td{padding:8px 11px;border-bottom:1px solid var(--line);vertical-align:top}
-  tbody tr:hover{background:#fafcfb}
-  .st{padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;white-space:nowrap}
-  .st.completed,.st.paid{background:#e6f6ef;color:#276749}
-  .st.process{background:#eaf3fc;color:#2b6cb0}
+  body{margin:0;font-family:"Nunito",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+       background:#fff;color:var(--ink);font-size:14px}
+  a{color:inherit;text-decoration:none}
+  .topbar{display:flex;align-items:center;gap:14px;padding:0 20px;height:56px;border-bottom:1px solid var(--line);background:#fff}
+  .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:16px;color:var(--navy)}
+  .logo{width:32px;height:32px;border-radius:8px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px}
+  .topnav{display:flex;align-items:center;gap:6px;margin-left:14px;color:var(--mut);font-size:13px}
+  .topnav .sep{color:#cbd5e1}
+  .topnav .home{color:var(--navy);font-weight:700}
+  .topright{margin-left:auto;display:flex;align-items:center;gap:14px}
+  .bell{position:relative;color:var(--navy)}
+  .bell .n{position:absolute;top:-6px;right:-8px;background:var(--red,#e53e3e);color:#fff;font-size:10px;border-radius:999px;padding:1px 5px;font-weight:700}
+  .avatar{width:30px;height:30px;border-radius:999px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
+  .uname{line-height:1.1}
+  .uname b{display:block;font-size:13px;color:var(--navy)}
+  .uname span{font-size:11px;color:var(--mut)}
+  .wrap{display:flex;min-height:calc(100vh - 56px)}
+  .side{width:230px;background:var(--navy);flex-shrink:0;padding:14px 0;color:#cbd5e1}
+  .side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#7aa2b8;padding:16px 20px 6px}
+  .side a{display:flex;align-items:center;gap:10px;padding:9px 20px;color:#d7e2ea;font-size:13.5px;border-left:3px solid transparent}
+  .side a:hover{background:#1E4A63;color:#fff}
+  .side a.active{background:#1E4A63;border-left-color:#2f855a;color:#fff;font-weight:700}
+  .main{flex:1;padding:20px 24px;min-width:0}
+  .crumb{color:var(--mut);font-size:12.5px;margin-bottom:6px}
+  .crumb b{color:var(--navy)}
+  .pagehead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0 16px}
+  .pagehead h1{font-size:20px;color:var(--navy);margin:0;font-weight:800}
+  .pagehead .spacer{flex:1}
+  button{font-family:inherit;font-size:13px;padding:8px 13px;border-radius:7px;cursor:pointer;font-weight:700}
+  .btn-outline{background:#fff;color:var(--navy);border:1px solid var(--line)}
+  .btn-outline:hover{background:#f8fafc}
+  .btn-primary{background:var(--green);color:#fff;border:1px solid var(--green)}
+  .btn-primary:hover{background:#276749}
+  .kpi-block{margin-bottom:14px}
+  .kpi-title{font-size:13px;font-weight:800;color:var(--navy);margin-bottom:8px;text-transform:uppercase;letter-spacing:.03em}
+  .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+  .kpi{border:1px solid var(--line);border-radius:10px;padding:13px;background:#fff}
+  .kpi .lbl{font-size:12px;color:var(--mut);margin-bottom:5px;font-weight:600}
+  .kpi .val{font-size:20px;font-weight:800;color:var(--navy)}
+  .tabs{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0 14px}
+  .tabs .tab{display:flex;align-items:center;gap:7px;padding:7px 13px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--mut);font-size:13px;font-weight:700;cursor:pointer}
+  .tabs .tab .cnt{background:#f1f5f9;padding:1px 7px;border-radius:999px;font-size:11.5px}
+  .tabs .tab.active{background:var(--green-50);border-color:var(--green);color:var(--green)}
+  .tabs .tab.active .cnt{background:var(--green);color:#fff}
+  .tblwrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:520px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:900px}
+  th{position:sticky;top:0;background:#f8fafc;color:var(--mut);text-align:left;font-weight:700;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:9px 12px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
+  tbody tr:hover{background:#f8fcfb}
+  .st{padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;white-space:nowrap}
+  .st.process,.st.paid{background:#eaf3fc;color:#2b6cb0}
   .st.packing{background:#eef2ff;color:#4338ca}
   .st.packed{background:#ede9fe;color:#6b21a8}
+  .st.completed{background:#e6f6ef;color:#276749}
   .st.sent{background:#fefce8;color:#a16207}
   .st.pending{background:#fee2e2;color:#b91c1c}
   .st.cancelled,.st.returned{background:#f3f4f6;color:#6b7280}
-  .muted{color:var(--mut);font-size:12px}
-  .pager{display:flex;gap:8px;align-items:center;margin-top:10px}
-  pre{background:#0b1220;color:#d1d5db;padding:12px;border-radius:8px;font-size:12px;overflow:auto}
-  .bundle{color:var(--green-d);font-weight:600}
-  details{border:1px solid var(--line);border-radius:8px;padding:8px 12px;margin:6px 0}
-  summary{cursor:pointer;font-weight:600}
-  .pill{display:inline-block;background:var(--green-50);color:var(--green-d);padding:2px 8px;
-        border-radius:999px;font-size:11px;font-weight:600;margin-right:4px}
-  .kpi{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:14px}
-  .kpi .box{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px}
-  .kpi .n{font-size:22px;font-weight:700}.kpi .l{color:var(--mut);font-size:12px}
+  .link{color:var(--teal);font-weight:700;cursor:pointer}
+  .bulk{display:flex;gap:8px;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid var(--line)}
+  .bulk button{background:#fff;border:1px solid var(--line);color:var(--navy);font-weight:700}
+  .bulk button:hover{background:#f8fafc}
+  .pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
+  .pcard{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;display:flex;gap:12px}
+  .pcard .thumb{width:60px;height:60px;border-radius:8px;object-fit:cover;background:#f1f5f9;flex-shrink:0}
+  .pcard .nm{font-weight:700;font-size:13px;color:var(--navy);line-height:1.35}
+  .pcard .meta{font-size:12px;color:var(--mut);margin-top:4px}
+  .pcard .price{font-weight:800;color:var(--green);margin-top:4px}
+  .pill{display:inline-block;background:var(--green-50);color:var(--green);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
 </style>
 </head>
 <body>
 <div class="topbar">
-  <div class="brand"><span class="logo">O</span> Octarine WMS <span class="sub">ERP Replica · Perpack</span></div>
+  <div class="brand"><span class="logo">O</span> Octarine</div>
+  <nav class="topnav">
+    <span class="home">Beranda</span> <span class="sep">/</span> <span>11</span> <span class="sep">/</span>
+    <span>HI</span> <span class="sep">/</span> <span>Hanif IT</span> <span class="sep">/</span> <span>Admin</span>
+  </nav>
+  <div class="topright">
+    <span class="bell">🔔<span class="n">11</span></span>
+    <span class="avatar">HI</span>
+    <span class="uname"><b>Hanif IT</b><span>Admin</span></span>
+  </div>
 </div>
 
 <div class="wrap">
   <aside class="side">
-    <div class="grp">Umum</div>
-    <a href="#" class="active">📦 Outbound · Sales Order</a>
-    <div class="grp">Master Data</div>
-    <a href="#">🏷️ Produk</a>
-    <a href="#">🏷️ Brand</a>
-    <a href="#">🏬 Warehouse</a>
-    <div class="grp">Integrasi</div>
-    <a href="#">🔔 Webhook Storefront</a>
-    <div class="grp">Lainnya</div>
-    <a href="#">📊 Dashboard</a>
+    <div class="grp">Menu</div>
+    <a href="#" data-view="product">🏷️ Master Data Product</a>
+    <a href="#" data-view="sales">📦 Outbound Sales</a>
+    <a href="#">📥 Inbound</a>
+    <a href="#">📦 Inventory</a>
+    <a href="#">📊 Report</a>
+    <a href="#">⚙️ Settings</a>
   </aside>
 
   <main class="main">
-    <div class="crumb">TO-BE · BOM Virtual Kitting</div>
+    <!-- ===== OUTBOUND SALES ===== -->
+    <section id="view-sales" style="display:none">
+      <div class="crumb">Home / Outbound / <b>Transaksi Penjualan</b> / Pesanan</div>
+      <div class="pagehead">
+        <h1>Transaksi Penjualan</h1>
+        <div class="spacer"></div>
+        <button class="btn-outline">Import</button>
+        <button class="btn-outline">Export</button>
+        <button class="btn-primary">Tambah Order</button>
+      </div>
 
-    <div class="card toolbar">
-      <input id="token" type="text" placeholder="Token opsional (untuk uji autentikasi — boleh kosong)">
-      <button id="saveToken">Simpan token</button>
-      <button id="clearToken" class="danger">Hapus</button>
-      <span id="authState" class="muted"></span>
-    </div>
-
-    <div class="kpi" id="kpis"></div>
-
-    <ul style="display:flex;gap:6px;list-style:none;padding:0;margin:0 0 14px">
-      <li><button id="tabTobe">✨ TO-BE (BOM)</button></li>
-      <li><button id="tabOrders" class="ghost">Sales Order</button></li>
-      <li><button id="tabProducts" class="ghost">Produk</button></li>
-      <li><button id="tabWebhook" class="ghost">Webhook</button></li>
-    </ul>
-
-    <section id="tab-tobe">
-      <div class="card">
-        <div class="toolbar">
-          <span class="muted">TO-BE: stok bundle dihitung dari komponen — <code>min(⌊stok/multiplier⌋)</code> — vs angka statis AS-IS yang menimbulkan phantom.</span>
-          <button id="loadToBe">Muat</button>
-          <span id="tobeMeta" class="muted"></span>
+      <div class="kpi-block">
+        <div class="kpi-title">Sales Order</div>
+        <div class="kpi-grid" id="kpiOrder">
+          <div class="kpi"><div class="lbl">On Process</div><div class="val">—</div></div>
+          <div class="kpi"><div class="lbl">On Picking</div><div class="val">—</div></div>
+          <div class="kpi"><div class="lbl">On Packing</div><div class="val">—</div></div>
+          <div class="kpi"><div class="lbl">Packed</div><div class="val">—</div></div>
         </div>
-        <div class="kpi" id="tobeKpis"></div>
-        <div class="tblwrap">
-          <table id="tobeTable">
-            <thead><tr><th>SKU bundle</th><th>komponen</th><th>AS-IS (statis)</th><th>TO-BE (BOM)</th><th>Δ phantom</th><th>status</th></tr></thead>
-            <tbody><tr><td colspan="6" class="muted">Memuat…</td></tr></tbody>
-          </table>
+      </div>
+      <div class="kpi-block">
+        <div class="kpi-title">Sales Product</div>
+        <div class="kpi-grid" id="kpiProduct">
+          <div class="kpi"><div class="lbl">On Process</div><div class="val">—</div></div>
+          <div class="kpi"><div class="lbl">On Picking</div><div class="val">—</div></div>
+          <div class="kpi"><div class="lbl">On Packing</div><div class="val">—</div></div>
+          <div class="kpi"><div class="lbl">Packed</div><div class="val">—</div></div>
         </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab active">Pesanan <span class="cnt" id="tabAll">0</span></button>
+        <button class="tab">Siap Diproses <span class="cnt" id="tabProcess">0</span></button>
+        <button class="tab">Picking <span class="cnt" id="tabPick">0</span></button>
+        <button class="tab">Packing <span class="cnt" id="tabPack">0</span></button>
+        <button class="tab">Ready to Pickup <span class="cnt">0</span></button>
+        <button class="tab">Request Cancel <span class="cnt" id="tabCancel">0</span></button>
+        <button class="tab">Pending <span class="cnt" id="tabPending">0</span></button>
+      </div>
+
+      <div class="bulk">
+        <button>Sync</button><button>Print</button><button>Proses Order</button>
+        <button>Set Order Paid</button><button>Cancel Order</button><button>Fake Order</button>
+      </div>
+
+      <div class="tblwrap">
+        <table id="orderTable">
+          <thead><tr><th>Tgl. Order</th><th>Batas Waktu Proses</th><th>Penerima</th><th>Lokasi</th><th>Qty</th><th>Total</th><th>Sumber</th><th>Pengiriman</th><th>Status</th><th>Aksi</th></tr></thead>
+          <tbody><tr><td colspan="10" style="color:var(--mut)">Memuat…</td></tr></tbody>
+        </table>
       </div>
     </section>
 
-    <section id="tab-orders" style="display:none">
-      <div class="card">
-        <div class="toolbar">
-          <label class="muted">Channel:</label>
-          <select id="channelSel"></select>
-          <label class="muted">Length:</label>
-          <select id="lengthSel">
-            <option>10</option><option>25</option><option>50</option><option selected>100</option><option>250</option>
-          </select>
-          <button id="loadOrders">Muat</button>
-          <span id="orderMeta" class="muted"></span>
-        </div>
-        <div class="tblwrap">
-          <table id="orderTable">
-            <thead><tr><th>reference_no</th><th>order_at</th><th>customer</th><th>qty</th><th>amount</th><th>courier</th><th>status</th><th>product_summary</th></tr></thead>
-            <tbody><tr><td colspan="8" class="muted">Memuat…</td></tr></tbody>
-          </table>
-        </div>
-        <div class="pager">
-          <button id="prevPage" class="ghost">← Sebelumnya</button>
-          <span id="pageInfo" class="muted">—</span>
-          <button id="nextPage" class="ghost">Berikutnya →</button>
-        </div>
+    <!-- ===== MASTER DATA / PRODUCT ===== -->
+    <section id="view-product">
+      <div class="crumb">Home / Master Data / <b>Daftar Produk</b></div>
+      <div class="pagehead">
+        <h1>Daftar Produk</h1>
+        <div class="spacer"></div>
+        <button class="btn-outline">Import</button>
+        <button class="btn-outline">Export</button>
+        <button class="btn-primary">Tambah</button>
       </div>
-    </section>
 
-    <section id="tab-products" style="display:none">
-      <div class="card">
-        <div class="toolbar">
-          <input id="productSearch" type="text" placeholder="Cari nama/SKU produk…">
-          <button id="loadProducts">Muat</button>
-          <span id="productMeta" class="muted"></span>
-        </div>
-        <div id="productList"></div>
+      <div class="tabs">
+        <button class="tab active">Group Produk</button>
+        <button class="tab">Variant Produk</button>
       </div>
-    </section>
 
-    <section id="tab-webhook" style="display:none">
-      <div class="card">
-        <strong>Webhook Bridge — <code>POST /api/webhooks/wms</code></strong>
-        <p class="muted">Ditembak otomatis saat halaman dimuat (terlihat di Network dev tools). Hasil:</p>
-        <pre id="resp">memuat…</pre>
-      </div>
+      <div class="pcards" id="productList"></div>
     </section>
   </main>
 </div>
 
 <script>
-const $ = (s) => document.querySelector(s);
-let token = localStorage.getItem('perpack_token') || '';
-let page = 1, length = 100, channelId = '';
-$('#token').value = token;
+const $ = s => document.querySelector(s);
+const token = localStorage.getItem('perpack_token') || '';
+const H = {'Authorization': token, 'Content-Type':'application/json'};
+async function api(p, o={}){ o.headers={...H,...(o.headers||{})}; const r=await fetch(p,o); if(!r.ok)throw new Error('HTTP '+r.status); return r.json(); }
 
-const authHeaders = () => ({ 'Authorization': token, 'Content-Type':'application/json' });
-function updateAuthState(){
-  $('#authState').textContent = token ? '✅ token' : '✅ mode demo';
+function showView(v){
+  $('#view-sales').style.display = v==='sales'?'':'none';
+  $('#view-product').style.display = v==='product'?'':'none';
+  document.querySelectorAll('.side a[data-view]').forEach(a=>a.classList.toggle('active', a.dataset.view===v));
+  if(v==='sales') loadSales();
+  if(v==='product') loadProducts();
 }
-updateAuthState();
+document.querySelectorAll('.side a[data-view]').forEach(a=>a.onclick=()=>showView(a.dataset.view));
 
-$('#saveToken').onclick = () => { token = $('#token').value.trim(); localStorage.setItem('perpack_token', token); updateAuthState(); };
-$('#clearToken').onclick = () => { token=''; localStorage.removeItem('perpack_token'); $('#token').value=''; updateAuthState(); };
-
-async function api(path, opts={}){
-  opts.headers = {...authHeaders(), ...(opts.headers||{})};
-  const r = await fetch(path, opts);
-  if(!r.ok) throw new Error('HTTP '+r.status);
-  return r.json();
-}
-
-async function loadChannels(){
+async function loadSales(){
   try{
-    const j = await api('/v1/channels');
-    $('#channelSel').innerHTML = '<option value="">Semua channel</option>' +
-      j.data.map(c=>`<option value="${c.id}">${c.name}</option>`).join('');
-  }catch(e){ console.error(e); }
-}
+    const j = await api('/api/to-be/sales-summary');
+    const d = j.data, o = d.sales_order, p = d.sales_product;
+    const set = (id, vals) => {
+      const keys = ['on_process','on_picking','on_packing','packed'];
+      document.querySelectorAll('#'+id+' .val').forEach((el,i)=>el.textContent = (vals[keys[i]]??0).toLocaleString('id-ID'));
+    };
+    set('kpiOrder', o); set('kpiProduct', p);
+    $('#tabAll').textContent = d.total_orders;
+    $('#tabProcess').textContent = o.on_process;
+    $('#tabPick').textContent = o.on_picking;
+    $('#tabPack').textContent = o.on_packing;
 
-async function loadOrders(){
-  channelId = $('#channelSel').value; length = +$('#lengthSel').value;
-  const body = {page, length};
-  if(channelId !== '') body.channel_id = +channelId;
-  try{
-    const j = await api('/v1/orders/page', {method:'POST', body:JSON.stringify(body)});
-    const m = j.metadata || {};
-    $('#orderMeta').textContent = `total ${m.count} · halaman ${m.page}/${m.total_page}`;
-    $('#pageInfo').textContent = `Halaman ${m.page} dari ${m.total_page}`;
-    const rows = j.data.map(o=>`<tr>
-      <td>${o.reference_no}</td><td>${(o.order_at||'').slice(0,10)}</td><td>${o.customer_name}</td>
-      <td>${o.qty}</td><td>${(o.amount||0).toLocaleString('id-ID')}</td>
-      <td>${o.courier}<div class="muted">${o.courier_label||''}</div></td>
-      <td><span class="st ${o.status}">${o.status}</span></td>
-      <td>${o.product_summary||''}</td></tr>`).join('');
-    $('#orderTable tbody').innerHTML = rows || '<tr><td colspan="8" class="muted">tidak ada data</td></tr>';
-    const st = {}; j.data.forEach(o=>st[o.status]=(st[o.status]||0)+1);
-    $('#kpis').innerHTML = `
-      <div class="box"><div class="n">${m.count.toLocaleString('id-ID')}</div><div class="l">Total order</div></div>
-      <div class="box"><div class="n">${(st.completed||0)}</div><div class="l">completed</div></div>
-      <div class="box"><div class="n">${(st.process||0)}</div><div class="l">process</div></div>
-      <div class="box"><div class="n">${(st.pending||0)}</div><div class="l">pending</div></div>`;
-  }catch(e){ $('#orderTable tbody').innerHTML = `<tr><td colspan="8" class="muted">Error: ${e.message}</td></tr>`; }
+    const r = await api('/v1/orders/page', {method:'POST', body:JSON.stringify({page:1,length:100})});
+    const rows = r.data.map(x=>`<tr>
+      <td>${(x.order_at||'').slice(0,10)}</td>
+      <td>${(x.deadline_at||'').slice(0,10)}</td>
+      <td>${x.customer_name||'—'}</td>
+      <td>${x.warehouse_name||'—'}</td>
+      <td>${x.qty}</td>
+      <td>Rp ${(x.amount||0).toLocaleString('id-ID')}</td>
+      <td>${x.channel_name||'—'}</td>
+      <td>${x.courier||'—'}<br><span style="color:var(--mut);font-size:11px">${x.courier_label||''}</span></td>
+      <td><span class="st ${x.status}">${x.status}</span></td>
+      <td><span class="link">Detail</span></td></tr>`).join('');
+    $('#orderTable tbody').innerHTML = rows || '<tr><td colspan="10" style="color:var(--mut)">tidak ada data</td></tr>';
+  }catch(e){ $('#orderTable tbody').innerHTML = `<tr><td colspan="10" style="color:var(--red,#e53e3e)">Error: ${e.message}</td></tr>`; }
 }
-$('#loadOrders').onclick = () => { page=1; loadOrders(); };
-$('#prevPage').onclick = () => { if(page>1){page--; loadOrders();} };
-$('#nextPage').onclick = () => { page++; loadOrders(); };
-$('#channelSel').onchange = () => { page=1; loadOrders(); };
 
 async function loadProducts(){
-  const q = encodeURIComponent($('#productSearch').value.trim());
   try{
-    const j = await api('/v1/products/group/page?page=1&length=100' + (q?`&search=${q}`:''));
-    const m = j.metadata || {};
-    $('#productMeta').textContent = `total ${m.count} grup produk`;
+    const j = await api('/v1/products/group/page?page=1&length=100');
     $('#productList').innerHTML = j.data.map(g=>{
-      const bundles = g.variants.filter(v=>v.is_bundle).length;
-      const vars = g.variants.map(v=>`<details style="margin-left:16px"><summary>
-        <span class="${v.is_bundle?'bundle':''}">${v.sku}</span>
-        ${v.is_bundle?'<span class="pill">bundle</span>':''}
-        · Rp ${(v.sell_price||0).toLocaleString('id-ID')} · ${v.variation_value||''}</summary>
-        <div class="muted">komponen: ${(v.components||[]).map(c=>`${c.component_sku}×${c.multiplier_qty}`).join(', ')||'—'}</div>
-        <div class="muted">stok: ${(v.stocks||[]).map(s=>`${s.name}=${s.available}`).join(', ')||'—'}</div>
-      </details>`).join('');
-      return `<details><summary><strong>${g.name.slice(0,70)}</strong>
-        <span class="muted">· ${g.variants.length} varian · ${bundles} bundle ·
-        Rp ${(g.sell_price_min||0).toLocaleString('id-ID')}–${(g.sell_price_max||0).toLocaleString('id-ID')}</span></summary>
-        ${vars||'<div class="muted">—</div>'}</details>`;
+      const v = g.variants[0] || {};
+      const img = (v.images&&v.images[0]&&v.images[0].url) || g.thumbnail || '';
+      const price = (g.sell_price_min||0) > 0 ? `Rp ${(g.sell_price_min||0).toLocaleString('id-ID')} – Rp ${(g.sell_price_max||0).toLocaleString('id-ID')}` : '-';
+      const bundle = g.variants.filter(x=>x.is_bundle).length;
+      return `<div class="pcard">
+        ${img?`<img class="thumb" src="${img}" alt="">`:'<div class="thumb"></div>'}
+        <div>
+          <div class="nm">${(g.name||'').slice(0,90)}</div>
+          <div class="price">${price}</div>
+          <div class="meta">Terdapat ${g.variants.length} variasi</div>
+          <div class="meta">Tampil di 2 channel${bundle?` · <span class="pill">${bundle} bundle</span>`:''}</div>
+        </div>
+      </div>`;
     }).join('');
-  }catch(e){ $('#productList').innerHTML = `<p class="muted">Error: ${e.message}</p>`; }
+  }catch(e){ $('#productList').innerHTML = `<div style="color:var(--red,#e53e3e)">Error: ${e.message}</div>`; }
 }
-$('#loadProducts').onclick = loadProducts;
 
-async function loadToBe(){
-  try{
-    const j = await api('/api/to-be/bundle-stock?limit=150');
-    const d = j.data, s = d.summary;
-    $('#tobeMeta').textContent = `${s.total_bundles} bundle`;
-    $('#tobeKpis').innerHTML = `
-      <div class="box"><div class="n">${s.total_bundles.toLocaleString('id-ID')}</div><div class="l">Total bundle</div></div>
-      <div class="box"><div class="n" style="color:#b91c1c">${s.oversell}</div><div class="l">Oversell (stok &gt; komponen)</div></div>
-      <div class="box"><div class="n" style="color:#a16207">${s.understate}</div><div class="l">Understate (stok &lt; komponen)</div></div>
-      <div class="box"><div class="n" style="color:var(--green-d)">${s.matched}</div><div class="l">Cocok (tanpa phantom)</div></div>`;
-    const rows = d.bundles.map(b=>{
-      const comp = b.components.map(c=>`${c.component_sku}×${c.multiplier}`).join(', ');
-      const tag = b.phantom > 0 ? '<span class="st pending">oversell</span>'
-                : b.phantom < 0 ? '<span class="st sent">understate</span>'
-                : '<span class="st completed">cocok</span>';
-      const col = b.phantom > 0 ? '#b91c1c' : b.phantom < 0 ? '#a16207' : '#276749';
-      return `<tr>
-        <td>${b.sku}</td><td class="muted">${comp}</td>
-        <td>${b.stock_as_is.toLocaleString('id-ID')}</td>
-        <td>${b.stock_to_be.toLocaleString('id-ID')}</td>
-        <td style="color:${col};font-weight:600">${b.phantom>0?'+':''}${b.phantom.toLocaleString('id-ID')}</td>
-        <td>${tag}</td></tr>`;
-    }).join('');
-    $('#tobeTable tbody').innerHTML = rows;
-  }catch(e){ $('#tobeTable tbody').innerHTML = `<tr><td colspan="6" class="muted">Error: ${e.message}</td></tr>`; }
-}
-$('#loadToBe').onclick = loadToBe;
-
-fetch('/api/webhooks/wms',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({event:'ping',event_id:'evt-page-load-'+Date.now()})})
-  .then(r=>r.json()).then(j=>{ $('#resp').textContent = JSON.stringify(j,null,2); })
-  .catch(e=>{ $('#resp').textContent = 'gagal: '+e; });
-
-function showTab(t){
-  ['tab-tobe','tab-orders','tab-products','tab-webhook'].forEach(id=>$('#'+id).style.display='none');
-  $('#tab-'+t).style.display='';
-  const target = 'tab'+t[0].toUpperCase()+t.slice(1);
-  ['tabTobe','tabOrders','tabProducts','tabWebhook'].forEach(id=>{ $('#'+id).className = (id===target)?'':'ghost'; });
-  if(t==='tobe') loadToBe();
-  if(t==='orders') loadOrders();
-  if(t==='products') loadProducts();
-}
-$('#tabTobe').onclick = ()=>showTab('tobe');
-$('#tabOrders').onclick = ()=>showTab('orders');
-$('#tabProducts').onclick = ()=>showTab('products');
-$('#tabWebhook').onclick = ()=>showTab('webhook');
-
-loadChannels();
-loadToBe();
+showView('product');
 </script>
 </body>
 </html>
