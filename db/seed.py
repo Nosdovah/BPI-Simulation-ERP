@@ -1,104 +1,118 @@
 # -*- coding: utf-8 -*-
-"""Seeder ERP/WMS (blueprint v2, TO-BE).
+"""Seeder — replica data Perpack/Octarine (diambil dari API nyata octarine-api.perpack.id).
 
-Kondisi sehat: BOM terisi (sku_bom), is_bundle aktif, stok fisik komponen
-akurat, dan beberapa order contoh pada lifecycle normal (tanpa macet).
+Sumber: data/perpack_seed.json (channels, warehouses, product_groups+nested variants,
+orders channel WEBSTORE). Tidak ada data sintetis.
 """
-import json, os, random, sqlite3
+import json, os, sqlite3
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DATA = os.path.join(BASE, "data", "base_catalog.json")
 SCHEMA = os.path.join(BASE, "db", "schema.sql")
 WMS_DB = os.path.join(BASE, "db", "wms.db")
-
-TOTAL_VARIANTS = 3696
-TOTAL_STOCK_ROWS = 7325
-SEED = 20260918
-FOCAL_BUNDLE = "Sanctum+Noctis-20ml-A1"     # SKU persis blueprint v2 §5.1
-FOCAL_COMPONENTS = [("M2291", 1, 11927), ("M2292", 1, 10932)]
-
-# contoh order sehat (lifecycle normal, bukan macet)
-DEMO_ORDERS = [
-    ("ORD-DEMO-0001", "completed", "COURIER", "SCP00001001"),
-    ("ORD-DEMO-0002", "sent", "COURIER", "SCP00001002"),
-    ("ORD-DEMO-0003", "process", "SYSTEM", None),
-]
-
-WAREHOUSES = [(8, "Warehouse Bogor"), (2, "Warehouse Jakarta"), (3, "Warehouse Surabaya")]
+SEED_FILE = os.path.join(BASE, "data", "perpack_seed.json")
 
 
 def main():
+    if not os.path.exists(SEED_FILE):
+        raise SystemExit(f"[seed] tidak ada {SEED_FILE} — jalankan fetch data dulu")
     if os.path.exists(WMS_DB):
         os.remove(WMS_DB)
+
+    d = json.load(open(SEED_FILE))
     conn = sqlite3.connect(WMS_DB)
     conn.executescript(open(SCHEMA).read())
     cur = conn.cursor()
-    cur.executemany("INSERT INTO warehouses (id,name) VALUES (?,?)", WAREHOUSES)
 
-    rng = random.Random(SEED)
-    bases = json.load(open(DATA))
+    chan_id = {c.get("name"): c.get("id") for c in d.get("channels", [])}
 
-    def ins_variant(sku, name, gender, price, is_bundle=0):
-        cur.execute("INSERT INTO variants (sku,name,gender,price_idr,is_bundle) VALUES (?,?,?,?,?)",
-                    (sku, name, gender, price, is_bundle))
+    for c in d.get("channels", []):
+        cur.execute("INSERT INTO channels (id,name,image,status) VALUES (?,?,?,?)",
+                    (c.get("id"), c.get("name"), c.get("image"), c.get("status")))
 
-    ins_variant("M2291", "Sanctum Eau de Parfum 20mL", "MEN", 89000)
-    ins_variant("M2292", "Noctis Eau de Parfum 20mL", "MEN", 89000)
-    ins_variant(FOCAL_BUNDLE, "Sanctum + Noctis - Bundling 2 Botol 20mL", "UNISEX", 169000, is_bundle=1)
+    for w in d.get("warehouses", []):
+        cur.execute("INSERT INTO warehouses "
+                    "(id,name,address,contact_phone,contact_email,warehouse_type,status,locations_json) "
+                    "VALUES (?,?,?,?,?,?,?,?)",
+                    (w.get("id"), w.get("name"), w.get("address"), w.get("contact_phone"),
+                     w.get("contact_email"), w.get("warehouse_type"), w.get("status"),
+                     json.dumps(w.get("locations") or {})))
 
-    variant_skus = ["M2291", "M2292", FOCAL_BUNDLE]
-    n = 3
-    while n < TOTAL_VARIANTS:
-        b = bases[n % len(bases)]
-        size = b["sizes"][(n // len(bases)) % len(b["sizes"])]
-        ins_variant(f"M{3000 + n}", f"{b['name']} {size}", b["gender"],
-                    min(189000, b["base_price"] + (n % 7) * 7000))
-        variant_skus.append(f"M{3000 + n}")
-        n += 1
+    for g in d.get("product_groups", []):
+        cur.execute("INSERT INTO product_groups "
+                    "(id,name,sku,description,thumbnail,brand_json,client_json,integration_json,"
+                    "sell_price_min,sell_price_max,weight,height,width,length,created_at,update_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (g.get("id"), g.get("name"), g.get("sku"), g.get("description"),
+                     g.get("thumbnail"), json.dumps(g.get("brand") or {}),
+                     json.dumps(g.get("client") or {}), json.dumps(g.get("integration") or {}),
+                     g.get("sell_price_min"), g.get("sell_price_max"),
+                     g.get("weight"), g.get("height"), g.get("width"), g.get("length"),
+                     g.get("created_at"), g.get("update_at")))
 
-    # stok fisik komponen (exact); bundle tidak punya stok fisik (virtual kitting)
-    cur.execute("INSERT INTO stocks (variant_sku,warehouse_id,available) VALUES (?,8,11927)", ("M2291",))
-    cur.execute("INSERT INTO stocks (variant_sku,warehouse_id,available) VALUES (?,8,10932)", ("M2292",))
-    stock_rows = 2
-    for sku in variant_skus[3:]:
-        if stock_rows >= TOTAL_STOCK_ROWS:
-            break
-        cur.execute("INSERT INTO stocks (variant_sku,warehouse_id,available) VALUES (?,8,?)",
-                    (sku, rng.randint(0, 20000)))
-        stock_rows += 1
-        if stock_rows < TOTAL_STOCK_ROWS:
-            cur.execute("INSERT INTO stocks (variant_sku,warehouse_id,available) VALUES (?,2,?)",
-                        (sku, rng.randint(0, 15000)))
-            stock_rows += 1
+        for v in (g.get("variants") or []):
+            if not isinstance(v, dict):
+                continue
+            cur.execute("INSERT INTO product_variants "
+                        "(id,product_group_id,name,sku,sku_code,alias,sell_price,purchase_price,"
+                        "variation_label,variation_value,weight,height,width,length,type,is_bundle,"
+                        "stock_type,stock_sort) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                        (v.get("id"), v.get("product_group_id"), v.get("name"), v.get("sku"),
+                         v.get("sku_code"), v.get("alias"), v.get("sell_price"), v.get("purchase_price"),
+                         v.get("variation_label"), v.get("variation_value"),
+                         v.get("weight"), v.get("height"), v.get("width"), v.get("length"),
+                         v.get("type"), 1 if v.get("is_bundle") else 0,
+                         v.get("stock_type"), v.get("stock_sort")))
+            vid = v.get("id")
+            for comp in (v.get("components") or []):
+                if isinstance(comp, dict):
+                    cur.execute("INSERT INTO variant_components "
+                                "(variant_id,product_id,component_sku,multiplier_qty) VALUES (?,?,?,?)",
+                                (vid, comp.get("product_id"), comp.get("component_sku"),
+                                 comp.get("multiplier_qty")))
+            for st in (v.get("stocks") or []):
+                if isinstance(st, dict):
+                    cur.execute("INSERT INTO variant_stocks "
+                                "(variant_id,warehouse_id,warehouse_name,available,on_order,reserved) "
+                                "VALUES (?,?,?,?,?,?)",
+                                (vid, st.get("id"), st.get("name"), st.get("available"),
+                                 st.get("on_order"), st.get("reserved")))
+            for im in (v.get("images") or []):
+                if isinstance(im, dict):
+                    cur.execute("INSERT INTO variant_images (variant_id,url,filename) VALUES (?,?,?)",
+                                (vid, im.get("url"), im.get("filename")))
 
-    # Modul A — relasi BOM (aktif): 1 bundle = 1 M2291 + 1 M2292
-    for comp_sku, mult, _stk in FOCAL_COMPONENTS:
-        cur.execute("INSERT INTO sku_bom (bundle_sku,component_sku,multiplier_qty,source,synced_at) "
-                    "VALUES (?,?,?,?,datetime('now'))",
-                    (FOCAL_BUNDLE, comp_sku, mult, "PERPACK_API"))
-
-    # Modul B — contoh order sehat
-    for idx, (oref, status, actor, tracking) in enumerate(DEMO_ORDERS, start=1):
-        cur.execute(
-            "INSERT INTO orders (order_ref,wms_order_id,channel,status,actor_last,"
-            "courier_name,courier_service,tracking_number,total_idr,paid_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,datetime('now','-1 hours'))",
-            (oref, 5310000 + idx, "WEBSTORE", status, actor,
-             "sicepat", "HALU", tracking, 169000))
-        sku = "M2291" if idx % 2 else "M2292"
-        cur.execute("INSERT INTO order_items (order_id,variant_sku,qty,unit_price_idr) "
-                    "VALUES (last_insert_rowid(),?,1,89000)", (sku,))
+    b = lambda x: 1 if x else 0
+    for o in d.get("orders", []):
+        cur.execute("INSERT INTO orders "
+                    "(id,reference_no,order_at,created_at,process_at,returned_at,deadline_at,qty,amount,"
+                    "cogs,shipping_fee,cod_fee,courier,courier_label,warehouse_name,channel_name,"
+                    "channel_image,channel_id,customer_username,customer_name,customer_phone,customer_email,"
+                    "picklist_id,picklist_no,delivery_note_id,delivery_note_no,awb,is_shipping_label_printed,"
+                    "printed,product_summary,integration_id,integration_store,is_cod,is_pre_order,is_instant,"
+                    "is_booking,is_fake_order,status,status_mp,sent_at,updated_at) "
+                    "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                    (o.get("id"), o.get("reference_no"), o.get("order_at"), o.get("created_at"),
+                     o.get("process_at"), o.get("returned_at"), o.get("deadline_at"), o.get("qty"),
+                     o.get("amount"), o.get("cogs"), o.get("shipping_fee"), o.get("cod_fee"),
+                     o.get("courier"), o.get("courier_label"), o.get("warehouse_name"),
+                     o.get("channel_name"), o.get("channel_image"),
+                     chan_id.get(o.get("channel_name"), 0),
+                     o.get("customer_username"), o.get("customer_name"), o.get("customer_phone"),
+                     o.get("customer_email"), o.get("picklist_id"), o.get("picklist_no"),
+                     o.get("delivery_note_id"), o.get("delivery_note_no"), o.get("awb"),
+                     b(o.get("is_shipping_label_printed")), o.get("printed"), o.get("product_summary"),
+                     o.get("integration_id"), o.get("integration_store"),
+                     b(o.get("is_cod")), b(o.get("is_pre_order")), b(o.get("is_instant")),
+                     b(o.get("is_booking")), b(o.get("is_fake_order")),
+                     o.get("status"), o.get("status_mp"), o.get("sent_at"), o.get("updated_at")))
 
     conn.commit()
-
-    n_v = cur.execute("SELECT COUNT(*) FROM variants").fetchone()[0]
-    n_s = cur.execute("SELECT COUNT(*) FROM stocks").fetchone()[0]
-    n_bom = cur.execute("SELECT COUNT(*) FROM sku_bom").fetchone()[0]
-    n_o = cur.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
+    ng = cur.execute("SELECT COUNT(*) FROM product_groups").fetchone()[0]
+    nv = cur.execute("SELECT COUNT(*) FROM product_variants").fetchone()[0]
+    nb = cur.execute("SELECT COUNT(*) FROM product_variants WHERE is_bundle=1").fetchone()[0]
+    no = cur.execute("SELECT COUNT(*) FROM orders").fetchone()[0]
     conn.close()
-
-    print(f"[seed] mode=tobe | variants={n_v} | stocks={n_s} | sku_bom={n_bom} | demo_orders={n_o}")
-    print(f"[seed] BOM: {FOCAL_BUNDLE} = min(11927, 10932) = 10932")
+    print(f"[seed] groups={ng} | variants={nv} | bundles={nb} | orders={no}")
     print(f"[seed] DB -> {WMS_DB}")
 
 

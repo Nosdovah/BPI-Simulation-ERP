@@ -1,88 +1,134 @@
--- SQLite schema (relational in-memory simulator) — blueprint v2 (TO-BE).
+-- SQLite schema — faithful replica of Perpack/Octarine WMS (octarine-api.perpack.id/v1).
 PRAGMA journal_mode=WAL;
 
-CREATE TABLE IF NOT EXISTS variants (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  sku         TEXT UNIQUE NOT NULL,
-  name        TEXT NOT NULL,
-  gender      TEXT CHECK(gender IN ('MEN','UNISEX','WOMEN')),
-  price_idr   INTEGER NOT NULL,
-  is_bundle   INTEGER NOT NULL DEFAULT 0,        -- 1 = bundle komposit
-  is_active   INTEGER NOT NULL DEFAULT 1,
-  created_at  TEXT DEFAULT (datetime('now'))
-);
-
--- Modul A — relasi BOM (sku_bom): bundle -> komponen + multiplier.
-CREATE TABLE IF NOT EXISTS sku_bom (
-  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  bundle_sku     TEXT NOT NULL,
-  component_sku  TEXT NOT NULL,
-  multiplier_qty INTEGER NOT NULL CHECK(multiplier_qty > 0),
-  source         TEXT DEFAULT 'PERPACK_API',
-  synced_at      TEXT,
-  UNIQUE(bundle_sku, component_sku)
+CREATE TABLE IF NOT EXISTS channels (
+  id     INTEGER PRIMARY KEY,
+  name   TEXT,
+  image  TEXT,
+  status TEXT
 );
 
 CREATE TABLE IF NOT EXISTS warehouses (
-  id   INTEGER PRIMARY KEY,
-  name TEXT NOT NULL
+  id             INTEGER PRIMARY KEY,
+  name           TEXT,
+  address        TEXT,
+  contact_phone  TEXT,
+  contact_email  TEXT,
+  warehouse_type TEXT,
+  status         TEXT,
+  locations_json TEXT
 );
 
-CREATE TABLE IF NOT EXISTS stocks (
-  variant_sku  TEXT NOT NULL,
-  warehouse_id INTEGER NOT NULL,
-  available    INTEGER NOT NULL DEFAULT 0,
-  on_order     INTEGER NOT NULL DEFAULT 0,
-  reserved     INTEGER NOT NULL DEFAULT 0,
-  updated_at   TEXT DEFAULT (datetime('now')),
-  PRIMARY KEY (variant_sku, warehouse_id)
+CREATE TABLE IF NOT EXISTS product_groups (
+  id               INTEGER PRIMARY KEY,
+  name             TEXT,
+  sku              TEXT,
+  description      TEXT,
+  thumbnail        TEXT,
+  brand_json       TEXT,
+  client_json      TEXT,
+  integration_json TEXT,
+  sell_price_min   INTEGER,
+  sell_price_max   INTEGER,
+  weight           REAL,
+  height           REAL,
+  width            REAL,
+  length           REAL,
+  created_at       TEXT,
+  update_at        TEXT
 );
 
--- ===== Modul B — Order & Status =====
+CREATE TABLE IF NOT EXISTS product_variants (
+  id               INTEGER PRIMARY KEY,
+  product_group_id INTEGER,
+  name             TEXT,
+  sku              TEXT,
+  sku_code         TEXT,
+  alias            TEXT,
+  sell_price       INTEGER,
+  purchase_price   INTEGER,
+  variation_label  TEXT,
+  variation_value  TEXT,
+  weight           REAL,
+  height           REAL,
+  width            REAL,
+  length           REAL,
+  type             TEXT,
+  is_bundle        INTEGER NOT NULL DEFAULT 0,
+  stock_type       TEXT,
+  stock_sort       TEXT
+);
+
+CREATE TABLE IF NOT EXISTS variant_components (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  variant_id     INTEGER,
+  product_id     INTEGER,
+  component_sku  TEXT,
+  multiplier_qty INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS variant_stocks (
+  variant_id     INTEGER,
+  warehouse_id   INTEGER,
+  warehouse_name TEXT,
+  available      INTEGER,
+  on_order       INTEGER,
+  reserved       INTEGER
+);
+
+CREATE TABLE IF NOT EXISTS variant_images (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  variant_id INTEGER,
+  url        TEXT,
+  filename   TEXT
+);
+
 CREATE TABLE IF NOT EXISTS orders (
-  id               INTEGER PRIMARY KEY AUTOINCREMENT,
-  order_ref        TEXT UNIQUE NOT NULL,
-  wms_order_id     INTEGER,
-  channel          TEXT DEFAULT 'WEBSTORE',
-  status           TEXT NOT NULL,
-  actor_last       TEXT,          -- SYSTEM | STAFF:<id> | COURIER
-  courier_name     TEXT,
-  courier_service  TEXT,
-  tracking_number  TEXT,
-  total_idr        INTEGER NOT NULL DEFAULT 0,
-  paid_at          TEXT,
-  processing_at    TEXT,
-  sent_at          TEXT,
-  delivered_at     TEXT,
-  created_at       TEXT DEFAULT (datetime('now'))
+  id                        INTEGER PRIMARY KEY,
+  reference_no              TEXT,
+  order_at                  TEXT,
+  created_at                TEXT,
+  process_at                TEXT,
+  returned_at               TEXT,
+  deadline_at               TEXT,
+  qty                       INTEGER,
+  amount                    INTEGER,
+  cogs                      INTEGER,
+  shipping_fee              INTEGER,
+  cod_fee                   INTEGER,
+  courier                   TEXT,
+  courier_label             TEXT,
+  warehouse_name            TEXT,
+  channel_name              TEXT,
+  channel_image             TEXT,
+  channel_id                INTEGER,
+  customer_username         TEXT,
+  customer_name             TEXT,
+  customer_phone            TEXT,
+  customer_email            TEXT,
+  picklist_id               INTEGER,
+  picklist_no               TEXT,
+  delivery_note_id          INTEGER,
+  delivery_note_no          TEXT,
+  awb                       TEXT,
+  is_shipping_label_printed INTEGER,
+  printed                   INTEGER,
+  product_summary           TEXT,
+  integration_id            INTEGER,
+  integration_store         TEXT,
+  is_cod                    INTEGER,
+  is_pre_order              INTEGER,
+  is_instant                INTEGER,
+  is_booking                INTEGER,
+  is_fake_order             INTEGER,
+  status                    TEXT,
+  status_mp                 TEXT,
+  sent_at                   TEXT,
+  updated_at                TEXT
 );
 
-CREATE TABLE IF NOT EXISTS order_items (
-  order_id       INTEGER REFERENCES orders(id) ON DELETE CASCADE,
-  variant_sku    TEXT REFERENCES variants(sku),
-  qty            INTEGER NOT NULL,
-  unit_price_idr INTEGER NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS order_status_history (
-  id          INTEGER PRIMARY KEY AUTOINCREMENT,
-  order_id    INTEGER REFERENCES orders(id),
-  from_status TEXT,
-  to_status   TEXT NOT NULL,
-  actor       TEXT NOT NULL,   -- SYSTEM | STAFF | COURIER
-  source      TEXT NOT NULL,   -- CHECKOUT | WMS | TRACKER
-  event_id    TEXT,
-  occurred_at TEXT DEFAULT (datetime('now'))
-);
-
--- ===== Modul C — webhook outbound (HMAC) =====
-CREATE TABLE IF NOT EXISTS webhook_delivery_log (
-  id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  event_id     TEXT,
-  event        TEXT,
-  lane         TEXT,
-  attempt      INTEGER,
-  http_status  INTEGER,
-  signature    TEXT,
-  sent_at      TEXT DEFAULT (datetime('now'))
-);
+CREATE INDEX IF NOT EXISTS idx_variants_group ON product_variants(product_group_id);
+CREATE INDEX IF NOT EXISTS idx_components_variant ON variant_components(variant_id);
+CREATE INDEX IF NOT EXISTS idx_stocks_variant ON variant_stocks(variant_id);
+CREATE INDEX IF NOT EXISTS idx_images_variant ON variant_images(variant_id);
+CREATE INDEX IF NOT EXISTS idx_orders_channel ON orders(channel_id);
