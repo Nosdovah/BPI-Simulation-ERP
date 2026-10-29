@@ -25,6 +25,7 @@ di-query via SQL; setiap webhook yang masuk **mengubah data di database**.
 | Status enum | huruf kecil: `paid · process · picking · packing · packed · ready_to_pickup · sent · completed · cancelled · returned` |
 | Kunci order | `reference_no` (string unik), BUKAN `id` numerik |
 | Harga | integer Rupiah (tanpa titik), mis. `98000` |
+| Timestamp | RFC3339 UTC `Z`, mis. `2026-10-27T05:00:18Z` (field `order_at`/`created_at`/`updated_at`) |
 
 - **Kontrak resmi** = **replika Perpack** → endpoint `/api/webhooks/*` + `/v1/*`.
 - **Skema/kontrak blueprint-v2 SUDAH DITINGGALKAN** — `/api/v2/*`, `compat.py`,
