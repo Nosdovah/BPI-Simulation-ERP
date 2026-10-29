@@ -134,7 +134,7 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   payload     TEXT,
   applied     INTEGER DEFAULT 0,
   effect      TEXT,
-  received_at TEXT DEFAULT (datetime('now'))
+  received_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
 CREATE INDEX IF NOT EXISTS idx_variants_group ON product_variants(product_group_id);

@@ -5,11 +5,28 @@ Sumber: data/perpack_seed.json (channels, warehouses, product_groups+nested vari
 orders channel WEBSTORE). Tidak ada data sintetis.
 """
 import json, os, sqlite3
+from datetime import datetime, timezone
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCHEMA = os.path.join(BASE, "db", "schema.sql")
 WMS_DB = os.path.join(BASE, "db", "wms.db")
 SEED_FILE = os.path.join(BASE, "data", "perpack_seed.json")
+
+
+def norm_ts(s):
+    """Normalisasi timestamp -> RFC3339 UTC 'Z'. Go-zero ('0001-01-01…') / kosong -> None."""
+    if not s:
+        return None
+    s = str(s).strip()
+    if s.startswith("0001-01-01"):
+        return None
+    if " " in s and "T" not in s:
+        s = s.replace(" ", "T")
+    try:
+        dt = datetime.fromisoformat(s.replace("Z", "+00:00") if s.endswith("Z") else s)
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except Exception:
+        return s
 
 
 def main():
@@ -47,7 +64,7 @@ def main():
                      json.dumps(g.get("client") or {}), json.dumps(g.get("integration") or {}),
                      g.get("sell_price_min"), g.get("sell_price_max"),
                      g.get("weight"), g.get("height"), g.get("width"), g.get("length"),
-                     g.get("created_at"), g.get("update_at")))
+                     norm_ts(g.get("created_at")), norm_ts(g.get("update_at"))))
 
         for v in (g.get("variants") or []):
             if not isinstance(v, dict):
@@ -91,8 +108,8 @@ def main():
                     "printed,product_summary,integration_id,integration_store,is_cod,is_pre_order,is_instant,"
                     "is_booking,is_fake_order,status,status_mp,sent_at,updated_at) "
                     "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                    (o.get("id"), o.get("reference_no"), o.get("order_at"), o.get("created_at"),
-                     o.get("process_at"), o.get("returned_at"), o.get("deadline_at"), o.get("qty"),
+                    (o.get("id"), o.get("reference_no"), norm_ts(o.get("order_at")), norm_ts(o.get("created_at")),
+                     norm_ts(o.get("process_at")), norm_ts(o.get("returned_at")), norm_ts(o.get("deadline_at")), o.get("qty"),
                      o.get("amount"), o.get("cogs"), o.get("shipping_fee"), o.get("cod_fee"),
                      o.get("courier"), o.get("courier_label"), o.get("warehouse_name"),
                      o.get("channel_name"), o.get("channel_image"),
@@ -104,7 +121,7 @@ def main():
                      o.get("integration_id"), o.get("integration_store"),
                      b(o.get("is_cod")), b(o.get("is_pre_order")), b(o.get("is_instant")),
                      b(o.get("is_booking")), b(o.get("is_fake_order")),
-                     o.get("status"), o.get("status_mp"), o.get("sent_at"), o.get("updated_at")))
+                     o.get("status"), o.get("status_mp"), norm_ts(o.get("sent_at")), norm_ts(o.get("updated_at"))))
 
     conn.commit()
     ng = cur.execute("SELECT COUNT(*) FROM product_groups").fetchone()[0]

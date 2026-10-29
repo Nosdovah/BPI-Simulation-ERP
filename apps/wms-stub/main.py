@@ -294,7 +294,7 @@ def apply_order_status(data):
     if not ref or not status:
         return {"applied": False, "note": "field wajib: ref/reference_no + status"}
     c = conn()
-    cur = c.execute("UPDATE orders SET status=?, updated_at=datetime('now') WHERE reference_no=?",
+    cur = c.execute("UPDATE orders SET status=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE reference_no=?",
                     (status, ref))
     n = cur.rowcount
     tn = data.get("tracking_no") or data.get("tracking_number") or data.get("awb")
@@ -391,7 +391,7 @@ async def webhook_purchase_order(body: dict = None):
     cur = c.execute(
         "INSERT INTO orders (reference_no, order_at, created_at, channel_name, channel_id, "
         "customer_name, customer_phone, customer_email, qty, amount, product_summary, status, "
-        "is_cod, is_fake_order) VALUES (?, datetime('now'), datetime('now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+        "is_cod, is_fake_order) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
         (ref, chan_name, chan_id, body.get("customer_name") or "", body.get("customer_phone") or "",
          body.get("customer_email") or "", qty, int(amount or 0), product_summary, status))
     oid = cur.lastrowid
