@@ -4,7 +4,7 @@
 Sumber: data/perpack_seed.json (channels, warehouses, product_groups+nested variants,
 orders channel WEBSTORE). Tidak ada data sintetis.
 """
-import json, os, sqlite3
+import hashlib, json, os, secrets, sqlite3
 from datetime import datetime, timezone
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -122,6 +122,13 @@ def main():
                      b(o.get("is_cod")), b(o.get("is_pre_order")), b(o.get("is_instant")),
                      b(o.get("is_booking")), b(o.get("is_fake_order")),
                      o.get("status"), o.get("status_mp"), norm_ts(o.get("sent_at")), norm_ts(o.get("updated_at"))))
+
+    # --- seed default admin (demo): username `admin` / password `admin123` ---
+    salt = secrets.token_hex(16)
+    admin_hash = salt + "$" + hashlib.pbkdf2_hmac("sha256", b"admin123", bytes.fromhex(salt), 100_000).hex()
+    cur.execute("INSERT OR IGNORE INTO users (username, email, name, password_hash, role, status) "
+                "VALUES (?,?,?,?,?, 'active')",
+                ("admin", "admin@octarine.co.id", "Administrator", admin_hash, "admin"))
 
     conn.commit()
     ng = cur.execute("SELECT COUNT(*) FROM product_groups").fetchone()[0]

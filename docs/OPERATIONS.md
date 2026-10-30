@@ -107,6 +107,8 @@ BPI-Simulation-ERP/
 | `variant_images` | gambar varian (variant_id, url, filename) |
 | `orders` | sales order — 40 field (reference_no, order_at, deadline_at, qty, amount, channel_name, courier, status, product_summary, awb, …) |
 | `webhook_events` | **audit** semua webhook masuk (event_id, event, payload, effect, received_at) |
+| `users` | user + role RBAC (username, email, password_hash, role, warehouse_id, status) |
+| `auth_tokens` | token sesi login (token_hash, user_id, expires_at) |
 
 **Kunci:** `orders.reference_no` (string unik) = kunci order. `variant_components` = sumber kebenaran BOM (bundle → komponen + multiplier).
 
@@ -226,7 +228,35 @@ Effect: `order.status_changed` → UPDATE status/awb/updated_at; `stock.updated`
 ```
 Rumus: `stock_to_be = min(⌊stok_komponen / multiplier⌋)`; `phantom = stock_as_is − stock_to_be`.
 
-### 6.5 UI
+### 6.5 Authentication & RBAC (User Role + Access)
+
+| Method | Path | Fungsi | Akses |
+|---|---|---|---|
+| POST | `/api/auth/register` | daftar user baru (role default `viewer`; role tinggi hanya oleh admin) | publik |
+| POST | `/api/auth/login` | login → `{token, user}` | publik |
+| GET | `/api/auth/me` | profil user dari token | token |
+| GET | `/api/auth/users` | daftar semua user | `admin` |
+| PATCH | `/api/auth/users/{id}/role` | ubah role user | `admin` |
+
+**Role:** `admin` · `operator` · `viewer`.
+
+**Matriks akses:**
+
+| Endpoint group | admin | operator | viewer | tanpa token |
+|---|---|---|---|---|
+| Auth (register/login/me) | ✓ | ✓ | ✓ | register/login ✓ |
+| User manage (`/users`, ubah role) | ✓ | ✗ | ✗ | ✗ (401) |
+| Read (catalog, orders, bundle-stock, summary) | ✓ | ✓ | ✓ | ✓ |
+| Mutasi (purchase-order, `wms` POST) — `AUTH_ENFORCED=0` (default) | ✓ | ✓ | ✓ | ✓ (demo) |
+| Mutasi — `AUTH_ENFORCED=1` | ✓ | ✓ | ✗ (403) | ✗ (401) |
+
+**Token:** `Authorization: Bearer <token>` (juga diterima `Authorization: <token>`), berlaku 24 jam (`auth_tokens`). Password di-hash **PBKDF2-SHA256** (100.000 iterasi + salt acak).
+
+**Seed default:** username `admin` / password `admin123` (role `admin`).
+
+**Menyalakan penegakan write:** env `AUTH_ENFORCED=1` (default `0` = demo terbuka).
+
+### 6.6 UI
 
 | Method | Path | Keterangan |
 |---|---|---|
@@ -260,8 +290,10 @@ Hasil pada seed: 3.039 bundle → **1 oversell** + **916 understate** (phantom).
 
 ## 9. Auth & CORS
 
-- Demo: **auth opsional** (semua endpoint 200 tanpa token). CORS `allow_origins=["*"]`.
-- Perpack produksi asli: header `Authorization: <JWT>` **tanpa `Bearer`**. Replika ini **tidak** memvalidasi JWT (§10.2).
+- **User & role:** fitur register + login + RBAC SUDAH ada (§6.5) — tabel `users` + `auth_tokens`, password PBKDF2, token Bearer 24 jam.
+- **Demo:** baca/mutasi data tetap **opsional auth** (tanpa token bisa, default `AUTH_ENFORCED=0`) supaya demo langsung tampil. Set `AUTH_ENFORCED=1` untuk mewajibkan token pada endpoint mutasi (`purchase-order`, `wms` POST).
+- **CORS:** `allow_origins=["*"]`.
+- Perpack produksi asli memakai header `Authorization: <JWT>` **tanpa `Bearer`** + klaim `client_id`/`warehouse_id` — validasi JWT produksi belum direplika (lihat G6 di §10).
 
 ---
 
@@ -274,7 +306,7 @@ Hasil pada seed: 3.039 bundle → **1 oversell** + **916 understate** (phantom).
 | **G3 — Idempotency webhook** | `event_id` disimpan tapi tidak di-dedupe (duplikat diterapkan ulang) | Cek `event_id` sudah ada di `webhook_events` → tolak duplikat (idempotent) |
 | **G4 — Oversell prevention / reservasi stok saat checkout** | `purchase-order` membuat order tanpa validasi ketersediaan stok | Validasi stok (komponen untuk bundle) sebelum INSERT; endpoint baru mis. `POST /api/to-be/checkout` atau guard di `purchase-order` |
 | **G5 — Outbound webhook push (ERP → storefront) + HMAC** | arsitektur saat ini PULL + PUSH storefront→ERP saja; tidak ada push ERP→storefront | Sender outbound `X-Perpack-Signature` (HMAC-SHA256) untuk event `order.status_changed`/`stock.updated` ke receiver storefront; `.env.example` (WEBHOOK_URL/SECRET) baru terpakai kalau ini dibuat |
-| **G6 — Auth produksi (JWT)** | auth longgar; tidak ada validasi klaim `client_id`/`warehouse_id` | Middleware `Authorization: <JWT>` (tanpa Bearer) + scoping per warehouse |
+| **G6 — Auth produksi (JWT)** | ✅ **sebagian**: register + login + role (RBAC) + token Bearer **SUDAH ada** (§6.5). Yang masih belum = validasi JWT Perpack `Authorization: <JWT>` **tanpa Bearer** + klaim `client_id`/`warehouse_id` + scoping per warehouse | Middleware validasi JWT Perpack + scoping warehouse |
 | **G7 — Lifecycle order penuh** | `purchase-order` hanya set subset 40 field; tidak ada transisi picking→packing→packed→sent + dokumen | Endpoint state-machine + generate `picklist` / `delivery_note` / `awb` |
 | **G8 — Modul Perpack lain** | replika hanya Master Data Produk + Outbound Sales (sesuai arahan) | Bila scope diperluas: inbound (`purchase`, `receiving`), inventory (`stocks`, `adjustment`, `transfer`), `picking`, `packing`, `delivery-notes`, `return`, `finance reports`, `marketplace` |
 | **G9 — Bersihkan artefak deprecated** | `compat.py` (`/api/v2/*` → 500), `scenario/reproduce_baseline.py` (skema lama), root `main.py` (stub blueprint-v2), `.env.example` (HMAC belum ada) | Hapus / beri tanda **DEPRECATED**; pastikan tidak dijadikan kontrak aktif |

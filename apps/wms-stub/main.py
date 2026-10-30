@@ -13,11 +13,14 @@ diverifikasi (replica; tidak memegang secret produksi). Tanpa auth -> 401.
 Envelope: {"code":200,"msg":{"id":"Sukses","en":"Success"},"data":...,"metadata":{...}}
 """
 import base64
+import hashlib
 import json
 import math
 import os
+import secrets
 import sqlite3
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import StarletteHTTPException
@@ -75,6 +78,157 @@ def require_auth(authorization: str = Header(None)):
     if not claims:
         return {"id": 0, "client_id": 0, "is_guest": True, "warehouse_id": 0}
     return claims
+
+
+# ============================ User & Role (RBAC + Access Control) ============================
+
+ROLES = ("admin", "operator", "viewer")
+AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "0") == "1"   # 1 = mutasi wajib token; 0 = demo terbuka
+
+
+def _auth_err(status, id_msg, en_msg):
+    return {"code": status, "msg": {"id": id_msg, "en": en_msg}, "data": None}
+
+
+def hash_password(password, salt=None):
+    salt = salt or secrets.token_hex(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 100_000).hex()
+    return f"{salt}${dk}"
+
+
+def verify_password(password, stored):
+    try:
+        salt, dk = stored.split("$", 1)
+        return secrets.compare_digest(
+            dk, hashlib.pbkdf2_hmac("sha256", password.encode(), bytes.fromhex(salt), 100_000).hex())
+    except Exception:
+        return False
+
+
+def _issue_token(user_id, ttl_hours=24):
+    token = secrets.token_hex(32)
+    expires = (datetime.now(timezone.utc) + timedelta(hours=ttl_hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    c = conn()
+    c.execute("INSERT INTO auth_tokens (token_hash, user_id, expires_at) VALUES (?,?,?)",
+              (hashlib.sha256(token.encode()).hexdigest(), user_id, expires))
+    c.commit()
+    c.close()
+    return token
+
+
+def current_user(authorization: str = Header(None)):
+    """Resolve token (Authorization: Bearer <t> atau Authorization: <t>) -> user dict / None."""
+    if not authorization:
+        return None
+    t = authorization.strip()
+    if t.lower().startswith("bearer "):
+        t = t[7:].strip()
+    if not t:
+        return None
+    th = hashlib.sha256(t.encode()).hexdigest()
+    return q1("SELECT u.id, u.username, u.email, u.name, u.role, u.warehouse_id, u.status "
+              "FROM auth_tokens t JOIN users u ON u.id = t.user_id "
+              "WHERE t.token_hash=? AND t.expires_at > strftime('%Y-%m-%dT%H:%M:%SZ','now') AND u.status='active'",
+              (th,))
+
+
+def require_role(*roles):
+    """Dependency: wajib token aktif; kalau `roles` terisi, role user harus cocok."""
+    def dep(authorization: str = Header(None)):
+        user = current_user(authorization)
+        if not user:
+            raise HTTPException(401, detail=_auth_err(
+                401, "Autentikasi diperlukan (token tidak valid/kadaluarsa)", "Authentication required"))
+        if roles and user["role"] not in roles:
+            raise HTTPException(403, detail=_auth_err(
+                403, "Akses ditolak: role tidak cukup", "Insufficient role"))
+        return user
+    return dep
+
+
+def require_write():
+    """Dependency mutasi: AUTH_ENFORCED=1 -> wajib admin/operator; kalau 0 -> demo terbuka."""
+    def dep(authorization: str = Header(None)):
+        if not AUTH_ENFORCED:
+            return {"role": "operator", "guest": True}
+        user = current_user(authorization)
+        if not user:
+            raise HTTPException(401, detail=_auth_err(
+                401, "Autentikasi diperlukan (token tidak valid/kadaluarsa)", "Authentication required"))
+        if user["role"] not in ("admin", "operator"):
+            raise HTTPException(403, detail=_auth_err(
+                403, "Akses ditolak: role tidak cukup", "Insufficient role"))
+        return user
+    return dep
+
+
+@app.get("/api/auth/me")
+def auth_me(user=Depends(require_role())):
+    return env(user)
+
+
+@app.post("/api/auth/register")
+def auth_register(body: dict = None, authorization: str = Header(None)):
+    body = body if isinstance(body, dict) else {}
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    if not username or not password:
+        raise HTTPException(422, detail=_auth_err(422, "username & password wajib diisi", "username & password required"))
+    if len(password) < 6:
+        raise HTTPException(422, detail=_auth_err(422, "password minimal 6 karakter", "password min 6 chars"))
+    if q1("SELECT id FROM users WHERE username=?", (username,)):
+        raise HTTPException(409, detail=_auth_err(409, "username sudah terdaftar", "username already exists"))
+    role = (body.get("role") or "viewer").lower()
+    if role not in ROLES:
+        role = "viewer"
+    if role != "viewer":
+        admin = current_user(authorization)   # naikkan role hanya oleh admin
+        if not admin or admin["role"] != "admin":
+            role = "viewer"
+    c = conn()
+    cur = c.execute("INSERT INTO users (username, email, name, password_hash, role, status) "
+                    "VALUES (?,?,?,?,?, 'active')",
+                    (username, (body.get("email") or "").strip() or None,
+                     body.get("name") or "", hash_password(password), role))
+    uid = cur.lastrowid
+    c.commit()
+    c.close()
+    return env({"id": uid, "username": username, "name": body.get("name") or "",
+                "email": (body.get("email") or "").strip(), "role": role})
+
+
+@app.post("/api/auth/login")
+def auth_login(body: dict = None):
+    body = body if isinstance(body, dict) else {}
+    username = (body.get("username") or "").strip()
+    password = body.get("password") or ""
+    u = q1("SELECT id, username, email, name, password_hash, role, warehouse_id, status "
+           "FROM users WHERE username=?", (username,))
+    if not u or u["status"] != "active" or not verify_password(password, u["password_hash"]):
+        raise HTTPException(401, detail=_auth_err(401, "Username atau password salah", "Invalid credentials"))
+    token = _issue_token(u["id"])
+    return env({"token": token, "user": {k: u[k] for k in ("id", "username", "email", "name", "role", "warehouse_id", "status")}})
+
+
+@app.get("/api/auth/users")
+def auth_users(_=Depends(require_role("admin"))):
+    rows = q("SELECT id, username, email, name, role, warehouse_id, status, created_at FROM users ORDER BY id")
+    return env([dict(r) for r in rows])
+
+
+@app.patch("/api/auth/users/{user_id}/role")
+def auth_set_role(user_id: int, body: dict = None, _=Depends(require_role("admin"))):
+    body = body if isinstance(body, dict) else {}
+    role = (body.get("role") or "").lower()
+    if role not in ROLES:
+        raise HTTPException(422, detail=_auth_err(422, f"role harus salah satu dari {ROLES}", "invalid role"))
+    c = conn()
+    cur = c.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
+    c.commit()
+    c.close()
+    if cur.rowcount == 0:
+        raise HTTPException(404, detail=_auth_err(404, "User tidak ditemukan", "User not found"))
+    return env({"updated": True, "user_id": user_id, "role": role})
 
 
 # ============================ DB ============================
@@ -306,7 +460,7 @@ def apply_order_status(data):
 
 
 @app.post("/api/webhooks/wms")
-async def webhook_wms(body: dict = None):
+async def webhook_wms(body: dict = None, actor=Depends(require_write())):
     body = body if isinstance(body, dict) else {}
     event = body.get("event", "")
     data = body.get("data") or {}
@@ -363,7 +517,7 @@ async def webhook_catalog(page: int = 1, length: int = 250):
 
 
 @app.post("/api/webhooks/purchase-order")
-async def webhook_purchase_order(body: dict = None):
+async def webhook_purchase_order(body: dict = None, actor=Depends(require_write())):
     """Terima purchase order baru dari storefront -> buat order di DB (status awal)."""
     body = body if isinstance(body, dict) else {}
     ref = (body.get("reference_no") or body.get("order_ref") or body.get("ref")

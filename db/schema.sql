@@ -137,6 +137,26 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   received_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS users (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  username      TEXT UNIQUE NOT NULL,
+  email         TEXT UNIQUE,
+  name          TEXT,
+  password_hash TEXT NOT NULL,
+  role          TEXT NOT NULL DEFAULT 'viewer',
+  warehouse_id  INTEGER,
+  status        TEXT NOT NULL DEFAULT 'active',
+  created_at    TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
+CREATE TABLE IF NOT EXISTS auth_tokens (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  token_hash TEXT UNIQUE NOT NULL,
+  user_id    INTEGER NOT NULL,
+  expires_at TEXT NOT NULL,
+  created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_variants_group ON product_variants(product_group_id);
 CREATE INDEX IF NOT EXISTS idx_components_variant ON variant_components(variant_id);
 CREATE INDEX IF NOT EXISTS idx_stocks_variant ON variant_stocks(variant_id);
