@@ -204,14 +204,14 @@
           </div>
         </div>
 
-        <div class="tabs">
-          <button class="tab active">Pesanan <span class="cnt" id="tabAll">0</span></button>
-          <button class="tab">Siap Diproses <span class="cnt" id="tabProcess">0</span></button>
-          <button class="tab">Picking <span class="cnt" id="tabPick">0</span></button>
-          <button class="tab">Packing <span class="cnt" id="tabPack">0</span></button>
-          <button class="tab">Ready to Pickup <span class="cnt">0</span></button>
-          <button class="tab">Request Cancel <span class="cnt" id="tabCancel">0</span></button>
-          <button class="tab">Pending <span class="cnt" id="tabPending">0</span></button>
+        <div class="tabs" id="statusTabs">
+          <button class="tab active" data-filter="" onclick="setTab(this)">Pesanan <span class="cnt" id="tabAll">0</span></button>
+          <button class="tab" data-filter="paid,process,processing" onclick="setTab(this)">Siap Diproses <span class="cnt" id="tabProcess">0</span></button>
+          <button class="tab" data-filter="pick,picking" onclick="setTab(this)">Picking <span class="cnt" id="tabPick">0</span></button>
+          <button class="tab" data-filter="packing,pack" onclick="setTab(this)">Packing <span class="cnt" id="tabPack">0</span></button>
+          <button class="tab" data-filter="ready_to_pickup" onclick="setTab(this)">Ready to Pickup <span class="cnt" id="tabReady">0</span></button>
+          <button class="tab" data-filter="cancelled,cancel,cancel_request,request_cancel" onclick="setTab(this)">Request Cancel <span class="cnt" id="tabCancel">0</span></button>
+          <button class="tab" data-filter="pending" onclick="setTab(this)">Pending <span class="cnt" id="tabPending">0</span></button>
         </div>
 
         <div class="bulk">
@@ -412,6 +412,13 @@ function showView(v){
 }
 
 /* ---- sales ---- */
+let currentTab = '';
+function setTab(el){
+  currentTab = el.dataset.filter || '';
+  document.querySelectorAll('#statusTabs .tab').forEach(t => t.classList.toggle('active', t===el));
+  loadSales();
+}
+
 async function loadSales(){
   try{
     const j = await api('/api/to-be/sales-summary');
@@ -419,12 +426,19 @@ async function loadSales(){
     const keys=['on_process','on_picking','on_packing','packed'];
     $$('#kpiOrder .val').forEach((el,i)=>el.textContent=(o[keys[i]]??0).toLocaleString('id-ID'));
     $$('#kpiProduct .val').forEach((el,i)=>el.textContent=(p[keys[i]]??0).toLocaleString('id-ID'));
-    $('#tabAll').textContent=d.total_orders;
-    $('#tabProcess').textContent=o.on_process;
-    $('#tabPick').textContent=o.on_picking;
-    $('#tabPack').textContent=o.on_packing;
+    const sc = d.status_counts || {};
+    const countFor = (st) => st ? st.reduce((s,x)=>s+(sc[x]||0),0) : d.total_orders;
+    $('#tabAll').textContent = d.total_orders;
+    $('#tabProcess').textContent = countFor(['paid','process','processing']);
+    $('#tabPick').textContent = countFor(['pick','picking']);
+    $('#tabPack').textContent = countFor(['packing','pack']);
+    $('#tabReady').textContent = countFor(['ready_to_pickup']);
+    $('#tabCancel').textContent = countFor(['cancelled','cancel','cancel_request','request_cancel']);
+    $('#tabPending').textContent = countFor(['pending']);
 
-    const r = await api('/v1/orders/page',{method:'POST',body:JSON.stringify({page:1,length:100})});
+    const body = {page:1, length:100};
+    if(currentTab){ body.statuses = currentTab.split(','); }
+    const r = await api('/v1/orders/page',{method:'POST',body:JSON.stringify(body)});
     const rows=r.data.map(x=>`<tr>
       <td>${(x.order_at||'').slice(0,10)}</td>
       <td>${(x.deadline_at||'').slice(0,10)}</td>

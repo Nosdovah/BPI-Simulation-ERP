@@ -395,6 +395,7 @@ class OrdersPage(BaseModel):
     channel_id: int = None
     search: str = None
     status: str = None
+    statuses: list = None
 
 
 @app.post("/v1/orders/page")
@@ -408,6 +409,9 @@ def orders_page(body: OrdersPage, _=Depends(require_auth)):
     if body.status:
         conds.append("status=?")
         args.append(body.status)
+    if body.statuses:
+        conds.append(f"status IN ({','.join('?' * len(body.statuses))})")
+        args += list(body.statuses)
     if body.search:
         conds.append("(reference_no LIKE ? OR customer_name LIKE ? OR product_summary LIKE ?)")
         args += [f"%{body.search}%"] * 3
@@ -639,6 +643,7 @@ def sales_summary():
         "sales_order": agg("order"),
         "sales_product": agg("qty"),
         "total_orders": sum(v["order"] for v in by.values()),
+        "status_counts": {k: by[k]["order"] for k in by},
     })
 
 
