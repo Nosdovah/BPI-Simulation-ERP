@@ -136,11 +136,19 @@
   <!-- register -->
   <div id="registerCard" class="acard" style="display:none">
     <div class="brand"><span class="logo">O</span> Octarine</div>
-    <div class="sub">Buat akun baru (role default: Tim Sales)</div>
+    <div class="sub">Buat akun baru</div>
     <form onsubmit="doRegister(event)">
       <div class="field"><label>Nama Lengkap</label><input id="regName"></div>
       <div class="field"><label>Username</label><input id="regUser" autocomplete="username"></div>
       <div class="field"><label>Email</label><input id="regEmail" type="email"></div>
+      <div class="field"><label>Role</label>
+        <select id="regRole">
+          <option value="sales" selected>Tim Sales</option>
+          <option value="warehouse">Tim Gudang</option>
+          <option value="admin">Super Admin</option>
+        </select>
+        <div style="font-size:11px;color:var(--mut);margin-top:4px">Super Admin hanya bisa ditetapkan oleh Super Admin (menu Settings).</div>
+      </div>
       <div class="field"><label>Password</label><input id="regPass" type="password" autocomplete="new-password"></div>
       <div class="err" id="regErr"></div>
       <button class="btn-primary" style="width:100%;padding:11px">Daftar</button>
@@ -338,7 +346,7 @@ async function doLogin(ev){
 
 async function doRegister(ev){
   ev.preventDefault();
-  const body={username:$('#regUser').value.trim(), password:$('#regPass').value, name:$('#regName').value.trim(), email:$('#regEmail').value.trim()};
+  const body={username:$('#regUser').value.trim(), password:$('#regPass').value, name:$('#regName').value.trim(), email:$('#regEmail').value.trim(), role:$('#regRole').value};
   try{
     const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
     const d=await r.json();

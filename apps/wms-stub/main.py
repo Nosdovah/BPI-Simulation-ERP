@@ -179,8 +179,8 @@ def auth_register(body: dict = None, authorization: str = Header(None)):
     role = (body.get("role") or "sales").lower()
     if role not in ROLES:
         role = "sales"
-    if role != "sales":
-        admin = current_user(authorization)   # role admin/warehouse hanya oleh admin
+    if role == "admin":
+        admin = current_user(authorization)   # Super Admin hanya boleh dibuat oleh Super Admin
         if not admin or admin["role"] != "admin":
             role = "sales"
     c = conn()
