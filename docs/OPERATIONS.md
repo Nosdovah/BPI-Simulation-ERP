@@ -312,13 +312,13 @@ Hasil pada seed: 3.039 bundle → **1 oversell** + **916 understate** (phantom).
 |---|---|---|
 | **G1 — Validasi enum status ketat (FM-6)** | `order.status_changed` menerima status apa pun, tidak menolak nilai di luar whitelist | Guard di `POST /api/webhooks/wms`: whitelist enum §7, di luar itu `422` |
 | **G2 — Guard out-of-order event (FM-5)** | event diterapkan sesuai urutan kedatangan, tidak ada cek `timestamp < last_occurred_at` | Cek `event_timestamp` per `reference_no` di webhook; tolak event lebih tua dari yang terakhir diproses |
-| **G3 — Idempotency webhook** | `event_id` disimpan tapi tidak di-dedupe (duplikat diterapkan ulang) | Cek `event_id` sudah ada di `webhook_events` → tolak duplikat (idempotent) |
-| **G4 — Oversell prevention / reservasi stok saat checkout** | `purchase-order` membuat order tanpa validasi ketersediaan stok | Validasi stok (komponen untuk bundle) sebelum INSERT; endpoint baru mis. `POST /api/to-be/checkout` atau guard di `purchase-order` |
-| **G5 — Outbound webhook push (ERP → storefront) + HMAC** | arsitektur saat ini PULL + PUSH storefront→ERP saja; tidak ada push ERP→storefront | Sender outbound `X-Perpack-Signature` (HMAC-SHA256) untuk event `order.status_changed`/`stock.updated` ke receiver storefront; `.env.example` (WEBHOOK_URL/SECRET) baru terpakai kalau ini dibuat |
+| **G3 — Idempotency webhook** | ✅ **sebagian**: `event_id` di `webhook_events` di-dedupe (retry `stock.updated` tidak dobel) + `reference_no` di `purchase-order` idempoten. Belum: idempotensi untuk concurrent (bukan cuma sekuensial) | dedupe penuh + kunci transaksi concurrent |
+| **G4 — Oversell prevention / reservasi stok saat checkout** | ✅ **SUDAH**: `purchase-order` memotong stok atomik (cek ketersediaan + potong + buat order dalam SATU transaksi; 409 + `data.insufficient` bila stok kurang) | (selesai) |
+| **G5 — Outbound webhook push (ERP → storefront) + HMAC** | ✅ **SPEC**: `docs/L3_REALTIME_PUSH_SPEC.md` (endpoint, header HMAC, retry, idempotensi). Implementasi masih gap | implementasi sender outbound + tabel `push_outbox` |
 | **G6 — Auth produksi (JWT)** | ✅ **sebagian**: register + login + role (RBAC) + token Bearer **SUDAH ada** (§6.5). Yang masih belum = validasi JWT Perpack `Authorization: <JWT>` **tanpa Bearer** + klaim `client_id`/`warehouse_id` + scoping per warehouse | Middleware validasi JWT Perpack + scoping warehouse |
 | **G7 — Lifecycle order penuh** | `purchase-order` hanya set subset 40 field; tidak ada transisi picking→packing→packed→sent + dokumen | Endpoint state-machine + generate `picklist` / `delivery_note` / `awb` |
 | **G8 — Modul Perpack lain** | replika hanya Master Data Produk + Outbound Sales (sesuai arahan) | Bila scope diperluas: inbound (`purchase`, `receiving`), inventory (`stocks`, `adjustment`, `transfer`), `picking`, `packing`, `delivery-notes`, `return`, `finance reports`, `marketplace` |
-| **G9 — Bersihkan artefak deprecated** | `compat.py` (`/api/v2/*` → 500), `scenario/reproduce_baseline.py` (skema lama), root `main.py` (stub blueprint-v2), `.env.example` (HMAC belum ada) | Hapus / beri tanda **DEPRECATED**; pastikan tidak dijadikan kontrak aktif |
+| **G9 — Bersihkan artefak deprecated** | ✅ **SUDAH**: root `main.py`, `compat.py`, `scenario/reproduce_baseline.py` dihapus (commit `3fa403c`) | (selesai) |
 
 **Prioritas saran:** G1 dan G2 paling dekat dengan temuan SoW/FMEA (FM-6, FM-5) — implement sekaligus menjadikan webhook *fail-fast* (tolak input buruk, bukan diam-diam menerima). G3 menyusul untuk idempotensi.
 
