@@ -283,12 +283,12 @@ let VIEW = 'sales';
 
 const ROLE_LABEL = {admin:'Super Admin', sales:'Tim Sales', warehouse:'Tim Gudang'};
 const PAGES = [
-  {key:'sales',    label:'Outbound Sales', icon:'📦', roles:['admin','sales']},
-  {key:'product',  label:'Master Data',    icon:'🏷️', roles:['admin','warehouse']},
-  {key:'inbound',  label:'Inbound',        icon:'📥', comingSoon:true},
-  {key:'inventory',label:'Inventory',      icon:'📦', comingSoon:true},
-  {key:'report',   label:'Report',         icon:'📊', comingSoon:true},
-  {key:'settings', label:'Settings',       icon:'⚙️', roles:['admin']},
+  {key:'sales',    slug:'outbound-sales', label:'Outbound Sales', icon:'📦', roles:['admin','sales']},
+  {key:'product',  slug:'master-data',    label:'Master Data',    icon:'🏷️', roles:['admin','warehouse']},
+  {key:'inbound',  slug:'inbound',        label:'Inbound',        icon:'📥', comingSoon:true},
+  {key:'inventory',slug:'inventory',      label:'Inventory',      icon:'📦', comingSoon:true},
+  {key:'report',   slug:'report',         label:'Report',         icon:'📊', comingSoon:true},
+  {key:'settings', slug:'settings',       label:'Settings',       icon:'⚙️', roles:['admin']},
 ];
 
 function authHeaders(){ const h={'Content-Type':'application/json'}; if(TOKEN) h['Authorization']='Bearer '+TOKEN; return h; }
@@ -300,10 +300,29 @@ async function api(p, o={}){
   return j;
 }
 
-/* ---- auth screen ---- */
-function showAuth(){ $('#appWrap').style.display='none'; $('#authWrap').style.display=''; showLogin(); }
+/* ---- routing (slug per halaman) ---- */
+function currentSlug(){ return (location.hash||'').replace(/^#\/?/, ''); }
 function showLogin(){ $('#loginCard').style.display=''; $('#registerCard').style.display='none'; }
 function showRegister(){ $('#loginCard').style.display='none'; $('#registerCard').style.display=''; }
+
+function router(){
+  const slug = currentSlug();
+  if(!USER){
+    $('#appWrap').style.display='none'; $('#authWrap').style.display='';
+    (slug==='register') ? showRegister() : showLogin();
+    if(slug!=='register' && slug!=='login') history.replaceState(null,'','#/login');
+    return;
+  }
+  $('#authWrap').style.display='none'; $('#appWrap').style.display='';
+  const visible = PAGES.filter(p => p.comingSoon || (p.roles && p.roles.includes(USER.role)));
+  let target = visible.find(p => p.slug===slug);
+  if(!target){
+    target = visible.find(p=>!p.comingSoon) || visible[0];
+    if(target) history.replaceState(null,'','#/'+target.slug);
+  }
+  showView(target.key);
+}
+window.addEventListener('hashchange', router);
 
 async function doLogin(ev){
   ev.preventDefault();
@@ -326,6 +345,7 @@ async function doRegister(ev){
     if(!r.ok) throw new Error((d.msg&&d.msg.id)||'Registrasi gagal');
     $('#loginUser').value=body.username; $('#loginPass').value=body.password;
     $('#regName').value=''; $('#regUser').value=''; $('#regEmail').value=''; $('#regPass').value='';
+    location.hash='#/login';
     showLogin(); $('#loginErr').textContent='Registrasi berhasil. Silakan masuk.';
   }catch(e){ $('#regErr').textContent=e.message; }
 }
@@ -333,7 +353,8 @@ async function doRegister(ev){
 async function doLogout(){
   try{ await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN}}); }catch(e){}
   TOKEN=''; USER=null; localStorage.removeItem('perpack_token');
-  showAuth();
+  location.hash='#/login';
+  router();
 }
 
 /* ---- boot ---- */
@@ -346,7 +367,7 @@ async function boot(){
     }catch(e){}
     TOKEN=''; localStorage.removeItem('perpack_token');
   }
-  showAuth();
+  router();
 }
 
 function renderApp(){
@@ -358,13 +379,10 @@ function renderApp(){
   const visible = PAGES.filter(p => p.comingSoon || (p.roles && p.roles.includes(USER.role)));
   let html = '<div class="grp">Menu</div>';
   for(const p of visible){
-    html += `<a href="#" data-view="${p.key}"><span>${p.icon} ${p.label}</span>${p.comingSoon?'<span class="soon">Coming Soon</span>':''}</a>`;
+    html += `<a href="#/${p.slug}" data-view="${p.key}"><span>${p.icon} ${p.label}</span>${p.comingSoon?'<span class="soon">Coming Soon</span>':''}</a>`;
   }
   $('#side').innerHTML = html;
-  $$('#side a[data-view]').forEach(a=>a.onclick=()=>showView(a.dataset.view));
-
-  if(!visible.some(p=>p.key===VIEW)) VIEW = (visible.find(p=>!p.comingSoon)||visible[0]||{}).key || 'sales';
-  showView(VIEW);
+  router();
 }
 
 function showView(v){
