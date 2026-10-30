@@ -232,23 +232,25 @@ Rumus: `stock_to_be = min(⌊stok_komponen / multiplier⌋)`; `phantom = stock_a
 
 | Method | Path | Fungsi | Akses |
 |---|---|---|---|
-| POST | `/api/auth/register` | daftar user baru (role default `viewer`; role tinggi hanya oleh admin) | publik |
+| POST | `/api/auth/register` | daftar user baru (role default `sales`; `admin`/`warehouse` hanya oleh admin) | publik |
 | POST | `/api/auth/login` | login → `{token, user}` | publik |
 | GET | `/api/auth/me` | profil user dari token | token |
+| POST | `/api/auth/logout` | cabut token sesi | token |
 | GET | `/api/auth/users` | daftar semua user | `admin` |
 | PATCH | `/api/auth/users/{id}/role` | ubah role user | `admin` |
 
-**Role:** `admin` · `operator` · `viewer`.
+**Role (3):** `admin` (Super Admin) · `sales` (Tim Sales) · `warehouse` (Tim Gudang).
 
-**Matriks akses:**
+**Hak akses halaman (UI):**
 
-| Endpoint group | admin | operator | viewer | tanpa token |
-|---|---|---|---|---|
-| Auth (register/login/me) | ✓ | ✓ | ✓ | register/login ✓ |
-| User manage (`/users`, ubah role) | ✓ | ✗ | ✗ | ✗ (401) |
-| Read (catalog, orders, bundle-stock, summary) | ✓ | ✓ | ✓ | ✓ |
-| Mutasi (purchase-order, `wms` POST) — `AUTH_ENFORCED=0` (default) | ✓ | ✓ | ✓ | ✓ (demo) |
-| Mutasi — `AUTH_ENFORCED=1` | ✓ | ✓ | ✗ (403) | ✗ (401) |
+| Halaman | Super Admin | Tim Sales | Tim Gudang |
+|---|---|---|---|
+| Outbound Sales | ✓ | ✓ | ✗ |
+| Master Data Produk | ✓ | ✗ | ✓ |
+| Settings (User & Role) | ✓ | ✗ | ✗ |
+| Inbound / Inventory / Report | Coming Soon (semua) | Coming Soon | Coming Soon |
+
+**Mutasi data** (`purchase-order`, `wms` POST): default terbuka (`AUTH_ENFORCED=0`). `AUTH_ENFORCED=1` → wajib login (role aktif apa pun); tanpa token → 401.
 
 **Token:** `Authorization: Bearer <token>` (juga diterima `Authorization: <token>`), berlaku 24 jam (`auth_tokens`). Password di-hash **PBKDF2-SHA256** (100.000 iterasi + salt acak).
 
@@ -256,11 +258,18 @@ Rumus: `stock_to_be = min(⌊stok_komponen / multiplier⌋)`; `phantom = stock_a
 
 **Menyalakan penegakan write:** env `AUTH_ENFORCED=1` (default `0` = demo terbuka).
 
-### 6.6 UI
+### 6.6 Export Excel
+
+| Method | Path | Fungsi |
+|---|---|---|
+| GET | `/api/export/orders` | Outbound Sales → `.xlsx` (kolom: reference, tgl, penerima, lokasi, qty, total, sumber, kurir, status) |
+| GET | `/api/export/products` | Master Data Produk → `.xlsx` (id, nama, sku, sku_code, harga, bundle) |
+
+### 6.7 UI
 
 | Method | Path | Keterangan |
 |---|---|---|
-| GET | `/` | `static/index.html` — replika UI Perpack (Nunito, navy `#163A50`, KPI Sales Order/Product, tabel 10 kolom) |
+| GET | `/` | SPA dari `static/index.html`: **login → register → dashboard** (Outbound Sales, Master Data, Settings RBAC, Coming Soon Inbound/Inventory/Report, tombol Export Excel). Sidebar difilter sesuai role. Font Nunito, navy `#163A50`. |
 
 ---
 
