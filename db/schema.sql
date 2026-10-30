@@ -157,6 +157,17 @@ CREATE TABLE IF NOT EXISTS auth_tokens (
   created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
 );
 
+CREATE TABLE IF NOT EXISTS push_outbox (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id   TEXT,
+  event      TEXT,
+  payload    TEXT,
+  status     TEXT DEFAULT 'pending',   -- pending | sent | failed
+  attempts   INTEGER DEFAULT 0,
+  note       TEXT,
+  created_at TEXT DEFAULT (strftime('%Y-%m-%dT%H:%M:%SZ','now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_variants_group ON product_variants(product_group_id);
 CREATE INDEX IF NOT EXISTS idx_components_variant ON variant_components(variant_id);
 CREATE INDEX IF NOT EXISTS idx_stocks_variant ON variant_stocks(variant_id);

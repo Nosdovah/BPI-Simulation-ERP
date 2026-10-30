@@ -14,6 +14,7 @@ Envelope: {"code":200,"msg":{"id":"Sukses","en":"Success"},"data":...,"metadata"
 """
 import base64
 import hashlib
+import hmac
 import io
 import json
 import math
@@ -22,6 +23,8 @@ import secrets
 import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
+
+import httpx
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import StarletteHTTPException
@@ -89,6 +92,10 @@ AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "0") == "1"   # 1 = mutasi wajib toke
 
 def _auth_err(status, id_msg, en_msg):
     return {"code": status, "msg": {"id": id_msg, "en": en_msg}, "data": None}
+
+
+def _err_env(status, id_msg, en_msg, data=None):
+    return {"code": status, "msg": {"id": id_msg, "en": en_msg}, "data": data}
 
 
 def hash_password(password, salt=None):
@@ -250,6 +257,16 @@ def conn():
     c = sqlite3.connect(WMS_DB)
     c.row_factory = sqlite3.Row
     return c
+
+
+@app.on_event("startup")
+def _ensure_schema():
+    """Pastikan schema lengkap secara idempotent (semua DDL pakai IF NOT EXISTS),
+    termasuk tabel baru seperti push_outbox — tanpa destruktif ke data yang ada."""
+    c = conn()
+    c.executescript(open(os.path.join(BASE, "db", "schema.sql")).read())
+    c.commit()
+    c.close()
 
 
 def q(sql, args=()):
@@ -458,22 +475,81 @@ def apply_stock_update(data):
     return {"applied": True, "sku": v["sku"], "variant_id": v["id"], "sisa_stok_total": remaining}
 
 
-def apply_order_status(data):
-    """order.status_changed/updated -> ubah status order di DB."""
+ORDER_STATUS_ALLOWED = ("paid", "process", "picking", "packing", "packed",
+                        "ready_to_pickup", "sent", "completed", "cancelled", "returned", "pending")
+
+
+def apply_order_status(data, event_timestamp=None):
+    """order.status_changed/updated -> ubah status order di DB.
+    G1: validasi enum ketat (status di luar whitelist ditolak).
+    G2: guard out-of-order (event_timestamp lebih tua dari updated_at terakhir -> ditolak)."""
     ref = data.get("ref") or data.get("reference_no") or data.get("order_ref")
-    status = data.get("status") or data.get("current_status") or data.get("to_status")
+    status = (data.get("status") or data.get("current_status") or data.get("to_status") or "").lower()
     if not ref or not status:
-        return {"applied": False, "note": "field wajib: ref/reference_no + status"}
+        return {"applied": False, "reason": "missing_fields", "note": "field wajib: ref/reference_no + status"}
+    if status not in ORDER_STATUS_ALLOWED:
+        return {"applied": False, "reason": "invalid_status", "status": status,
+                "allowed": list(ORDER_STATUS_ALLOWED),
+                "note": f"status {status!r} di luar whitelist enum"}
     c = conn()
-    cur = c.execute("UPDATE orders SET status=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE reference_no=?",
-                    (status, ref))
+    cur = c.cursor()
+    row = cur.execute("SELECT status, updated_at FROM orders WHERE reference_no=?", (ref,)).fetchone()
+    if not row:
+        c.close()
+        return {"applied": False, "reason": "not_found", "note": f"order {ref} tidak ditemukan"}
+    if event_timestamp and row["updated_at"] and event_timestamp < row["updated_at"]:
+        c.close()
+        return {"applied": False, "reason": "out_of_order", "ref": ref,
+                "event_timestamp": event_timestamp, "last_updated_at": row["updated_at"],
+                "note": "event lebih tua dari status terakhir (out-of-order)"}
+    new_at = event_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    cur = cur.execute("UPDATE orders SET status=?, updated_at=? WHERE reference_no=?",
+                      (status, new_at, ref))
     n = cur.rowcount
     tn = data.get("tracking_no") or data.get("tracking_number") or data.get("awb")
     if tn:
-        c.execute("UPDATE orders SET awb=? WHERE reference_no=?", (tn, ref))
+        cur.execute("UPDATE orders SET awb=? WHERE reference_no=?", (tn, ref))
     c.commit()
     c.close()
-    return {"applied": n > 0, "reference_no": ref, "status": status, "rows_updated": n}
+    return {"applied": n > 0, "reference_no": ref, "status": status,
+            "previous_status": row["status"], "rows_updated": n}
+
+
+# ============================ Push Outbound (L3 realtime) ============================
+
+ERP_PUSH_URL = os.getenv("ERP_PUSH_WEBHOOK_URL", "")
+ERP_PUSH_SECRET = os.getenv("ERP_PUSH_WEBHOOK_SECRET", "")
+
+
+def _sign_payload(raw_body: str) -> str:
+    return hmac.new(ERP_PUSH_SECRET.encode(), raw_body.encode(), hashlib.sha256).hexdigest()
+
+
+def _enqueue_push(event_id: str, event: str, data: dict):
+    """L3: kirim webhook outbound (HMAC) ke webstore + catat di push_outbox (best-effort)."""
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    payload = {"event": event, "event_id": event_id, "timestamp": ts, "data": data}
+    raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    sig = _sign_payload(raw)
+    if not ERP_PUSH_URL:
+        return {"pushed": False, "status": "skipped", "note": "ERP_PUSH_WEBHOOK_URL tidak diset"}
+    c = conn()
+    try:
+        r = httpx.post(ERP_PUSH_URL, content=raw.encode(),
+                       headers={"Content-Type": "application/json",
+                                "X-Perpack-Signature": sig,
+                                "X-Perpack-Event-Id": event_id,
+                                "X-Perpack-Timestamp": ts}, timeout=3.0)
+        status = "sent" if r.status_code < 300 else "failed"
+        note = f"HTTP {r.status_code}"
+        attempts = 1
+    except Exception as e:
+        status, note, attempts = "failed", str(e), 0
+    c.execute("INSERT INTO push_outbox (event_id, event, payload, status, attempts, note) VALUES (?,?,?,?,?,?)",
+              (event_id, event, raw, status, attempts, note))
+    c.commit()
+    c.close()
+    return {"pushed": status == "sent", "status": status, "note": note, "signature": sig[:16] + "…"}
 
 
 @app.post("/api/webhooks/wms")
@@ -492,12 +568,16 @@ async def webhook_wms(body: dict = None, actor=Depends(require_write())):
                     "note": "event_id sudah diproses (idempotent)",
                     "effect": json.loads(dup["effect"]) if dup["effect"] else None,
                     "total_events": total})
+
+    ts = body.get("timestamp") or data.get("updated_at") or data.get("timestamp") or data.get("occurred_at")
     if event in ("stock.updated", "inventory.updated"):
         effect = apply_stock_update(data)
     elif event in ("order.status_changed", "order.status_updated", "order.updated"):
-        effect = apply_order_status(data)
+        effect = apply_order_status(data, event_timestamp=ts)
     else:
         effect = {"applied": False, "note": f"event {event!r} diterima (ping/unknown) — tanpa mutasi DB"}
+
+    # audit (selalu dicatat — termasuk event yang gagal validasi)
     cur = c.execute("INSERT INTO webhook_events (event_id, event, payload, applied, effect) "
                     "VALUES (?,?,?,?,?)",
                     (event_id, event, json.dumps(body, ensure_ascii=False),
@@ -505,13 +585,33 @@ async def webhook_wms(body: dict = None, actor=Depends(require_write())):
     total = cur.execute("SELECT COUNT(*) c FROM webhook_events").fetchone()["c"]
     c.commit()
     c.close()
+
+    # L3: push outbound bila ada mutasi yang benar-benar diterapkan
+    push = _enqueue_push(event_id, event, data) if effect.get("applied") else None
+
+    reason = effect.get("reason")
+    if reason == "invalid_status":
+        return JSONResponse(status_code=422, content=_err_env(422, "Status di luar whitelist enum", "Status outside whitelist", effect))
+    if reason == "out_of_order":
+        return JSONResponse(status_code=409, content=_err_env(409, "Event out-of-order (lebih tua)", "Out-of-order event", effect))
+    if reason == "not_found":
+        return JSONResponse(status_code=404, content=_err_env(40401, "Order tidak ditemukan", "Order not found", effect))
+
     return env({"applied": bool(effect.get("applied")), "event": event, "event_id": event_id,
-                "effect": effect, "total_events": total})
+                "effect": effect, "total_events": total, "push": push})
 
 
 @app.get("/api/webhooks/wms")
 async def webhook_wms_get(limit: int = 50):
     rows = q("SELECT id, event_id, event, applied, effect, received_at FROM webhook_events "
+             "ORDER BY id DESC LIMIT ?", (limit,))
+    return env([dict(r) for r in rows])
+
+
+@app.get("/api/push-outbox")
+async def push_outbox_list(limit: int = 50):
+    """Audit outbox push L3 (event outbound ERP -> webstore)."""
+    rows = q("SELECT id, event_id, event, status, attempts, note, created_at FROM push_outbox "
              "ORDER BY id DESC LIMIT ?", (limit,))
     return env([dict(r) for r in rows])
 

@@ -1,6 +1,6 @@
-# L3 — Real-time Push ERP → Webstore (Spesifikasi TO-BE / Rekomendasi Paper)
+# L3 — Real-time Push ERP → Webstore (Spesifikasi & Implementasi)
 
-**Status:** SPEK rekomendasi TO-BE — **BELUM diimplementasi**. Merujuk gap **G5** di `docs/OPERATIONS.md` §10.
+**Status:** ✅ **TERIMPLEMENTASI** (komit `main`). Aktif bila env `ERP_PUSH_WEBHOOK_URL` di-set; default tidak aktif (tanpa perubahan perilaku pull/cache L1-L2).
 
 ---
 
