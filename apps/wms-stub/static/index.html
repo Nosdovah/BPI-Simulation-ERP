@@ -361,6 +361,7 @@ async function doRegister(ev){
 async function doLogout(){
   try{ await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN}}); }catch(e){}
   TOKEN=''; USER=null; localStorage.removeItem('perpack_token');
+  $('#loginUser').value=''; $('#loginPass').value=''; $('#loginErr').textContent='';
   location.hash='#/login';
   router();
 }

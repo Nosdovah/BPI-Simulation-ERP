@@ -690,7 +690,11 @@ def export_products():
 @app.get("/", response_class=HTMLResponse)
 def demo_page():
     index = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static", "index.html")
-    return FileResponse(index)
+    if not os.path.exists(index):
+        return HTMLResponse("<h1>Halaman tidak ditemukan</h1>", status_code=404)
+    return HTMLResponse(open(index, encoding="utf-8").read(),
+                        headers={"Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                                 "Pragma": "no-cache"})
 
 
 if __name__ == "__main__":
