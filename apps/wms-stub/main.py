@@ -182,7 +182,9 @@ def auth_register(body: dict = None, authorization: str = Header(None)):
     if role == "admin":
         admin = current_user(authorization)   # Super Admin hanya boleh dibuat oleh Super Admin
         if not admin or admin["role"] != "admin":
-            role = "sales"
+            raise HTTPException(403, detail=_auth_err(
+                403, "Super Admin hanya bisa dibuat oleh Super Admin yang login",
+                "Super Admin role requires an authenticated Super Admin"))
     c = conn()
     cur = c.execute("INSERT INTO users (username, email, name, password_hash, role, status) "
                     "VALUES (?,?,?,?,?, 'active')",
