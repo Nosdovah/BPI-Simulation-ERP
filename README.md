@@ -6,6 +6,8 @@ storefront + core dikerjakan di repo terpisah oleh tim lain.
 
 > 📘 **Tim storefront — baca dulu: [`docs/API_INTEGRATION.md`](docs/API_INTEGRATION.md)**
 > (semua endpoint webhook + payload + contoh kode frontend + curl).
+>
+> 🛠 **Admin/Ops (deploy, endpoint lengkap, fitur belum dikembangkan): [`docs/OPERATIONS.md`](docs/OPERATIONS.md)**
 
 ## Live
 
