@@ -9,42 +9,56 @@
 <style>
   :root{
     --navy:#163A50; --navy-2:#1E4A63; --green:#2f855a; --green-50:#e6f6ef; --teal:#2C7A7B;
-    --line:#e2e8f0; --ink:#1a202c; --mut:#64748b;
+    --line:#e2e8f0; --ink:#1a202c; --mut:#64748b; --red:#e53e3e;
   }
   *{box-sizing:border-box}
   body{margin:0;font-family:"Nunito",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
        background:#fff;color:var(--ink);font-size:14px}
   a{color:inherit;text-decoration:none}
+  button{font-family:inherit;font-size:13px;padding:8px 13px;border-radius:7px;cursor:pointer;font-weight:700}
+  .btn-outline{background:#fff;color:var(--navy);border:1px solid var(--line)}
+  .btn-outline:hover{background:#f8fafc}
+  .btn-primary{background:var(--green);color:#fff;border:1px solid var(--green)}
+  .btn-primary:hover{background:#276749}
+  .link{color:var(--teal);font-weight:700;cursor:pointer}
+
+  /* ===== auth ===== */
+  .auth{min-height:100vh;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#163A50,#1E4A63);padding:20px}
+  .acard{background:#fff;border-radius:14px;padding:30px;width:400px;max-width:94vw;box-shadow:0 20px 50px rgba(0,0,0,.28)}
+  .acard .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:20px;color:var(--navy);margin-bottom:4px}
+  .logo{width:34px;height:34px;border-radius:8px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;flex-shrink:0}
+  .acard .sub{color:var(--mut);font-size:13px;margin-bottom:22px}
+  .field{margin-bottom:13px}
+  .field label{display:block;font-size:12px;font-weight:700;color:var(--navy);margin-bottom:5px}
+  .field input,.field select{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;font:inherit;font-size:13.5px}
+  .field input:focus,.field select:focus{outline:none;border-color:var(--green)}
+  .err{color:var(--red);font-size:12.5px;min-height:18px;margin:2px 0 8px}
+  .authfoot{font-size:13px;color:var(--mut);margin-top:14px}
+  .authfoot .link{color:var(--green)}
+
+  /* ===== app shell ===== */
   .topbar{display:flex;align-items:center;gap:14px;padding:0 20px;height:56px;border-bottom:1px solid var(--line);background:#fff}
   .brand{display:flex;align-items:center;gap:9px;font-weight:800;font-size:16px;color:var(--navy)}
-  .logo{width:32px;height:32px;border-radius:8px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:14px}
-  .topnav{display:flex;align-items:center;gap:6px;margin-left:14px;color:var(--mut);font-size:13px}
-  .topnav .sep{color:#cbd5e1}
-  .topnav .home{color:var(--navy);font-weight:700}
   .topright{margin-left:auto;display:flex;align-items:center;gap:14px}
-  .bell{position:relative;color:var(--navy)}
-  .bell .n{position:absolute;top:-6px;right:-8px;background:var(--red,#e53e3e);color:#fff;font-size:10px;border-radius:999px;padding:1px 5px;font-weight:700}
   .avatar{width:30px;height:30px;border-radius:999px;background:var(--navy);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px}
   .uname{line-height:1.1}
   .uname b{display:block;font-size:13px;color:var(--navy)}
   .uname span{font-size:11px;color:var(--mut)}
   .wrap{display:flex;min-height:calc(100vh - 56px)}
-  .side{width:230px;background:var(--navy);flex-shrink:0;padding:14px 0;color:#cbd5e1}
+  .side{width:240px;background:var(--navy);flex-shrink:0;padding:14px 0;color:#cbd5e1}
   .side .grp{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:#7aa2b8;padding:16px 20px 6px}
-  .side a{display:flex;align-items:center;gap:10px;padding:9px 20px;color:#d7e2ea;font-size:13.5px;border-left:3px solid transparent}
+  .side a{display:flex;align-items:center;gap:9px;padding:9px 16px;color:#d7e2ea;font-size:13.5px;border-left:3px solid transparent;cursor:pointer}
   .side a:hover{background:#1E4A63;color:#fff}
   .side a.active{background:#1E4A63;border-left-color:#2f855a;color:#fff;font-weight:700}
+  .soon{font-size:10px;background:#0f2a3a;color:#7aa2b8;padding:1px 7px;border-radius:999px;font-weight:700;white-space:nowrap}
   .main{flex:1;padding:20px 24px;min-width:0}
   .crumb{color:var(--mut);font-size:12.5px;margin-bottom:6px}
   .crumb b{color:var(--navy)}
   .pagehead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0 16px}
   .pagehead h1{font-size:20px;color:var(--navy);margin:0;font-weight:800}
   .pagehead .spacer{flex:1}
-  button{font-family:inherit;font-size:13px;padding:8px 13px;border-radius:7px;cursor:pointer;font-weight:700}
-  .btn-outline{background:#fff;color:var(--navy);border:1px solid var(--line)}
-  .btn-outline:hover{background:#f8fafc}
-  .btn-primary{background:var(--green);color:#fff;border:1px solid var(--green)}
-  .btn-primary:hover{background:#276749}
+
+  /* KPI */
   .kpi-block{margin-bottom:14px}
   .kpi-title{font-size:13px;font-weight:800;color:var(--navy);margin-bottom:8px;text-transform:uppercase;letter-spacing:.03em}
   .kpi-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
@@ -56,23 +70,27 @@
   .tabs .tab .cnt{background:#f1f5f9;padding:1px 7px;border-radius:999px;font-size:11.5px}
   .tabs .tab.active{background:var(--green-50);border-color:var(--green);color:var(--green)}
   .tabs .tab.active .cnt{background:var(--green);color:#fff}
-  .tblwrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:520px}
+
+  /* table */
+  .tblwrap{overflow:auto;border:1px solid var(--line);border-radius:10px;max-height:560px}
   table{width:100%;border-collapse:collapse;font-size:12.5px;min-width:900px}
   th{position:sticky;top:0;background:#f8fafc;color:var(--mut);text-align:left;font-weight:700;padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
   td{padding:9px 12px;border-bottom:1px solid #f1f5f9;vertical-align:middle}
   tbody tr:hover{background:#f8fcfb}
   .st{padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:700;white-space:nowrap}
   .st.process,.st.paid{background:#eaf3fc;color:#2b6cb0}
+  .st.picking,.st.pick{background:#e0f2fe;color:#0369a1}
   .st.packing{background:#eef2ff;color:#4338ca}
   .st.packed{background:#ede9fe;color:#6b21a8}
   .st.completed{background:#e6f6ef;color:#276749}
   .st.sent{background:#fefce8;color:#a16207}
   .st.pending{background:#fee2e2;color:#b91c1c}
   .st.cancelled,.st.returned{background:#f3f4f6;color:#6b7280}
-  .link{color:var(--teal);font-weight:700;cursor:pointer}
   .bulk{display:flex;gap:8px;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid var(--line)}
   .bulk button{background:#fff;border:1px solid var(--line);color:var(--navy);font-weight:700}
   .bulk button:hover{background:#f8fafc}
+
+  /* product cards */
   .pcards{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:14px}
   .pcard{border:1px solid var(--line);border-radius:12px;padding:14px;background:#fff;display:flex;gap:12px}
   .pcard .thumb{width:60px;height:60px;border-radius:8px;object-fit:cover;background:#f1f5f9;flex-shrink:0}
@@ -80,139 +98,304 @@
   .pcard .meta{font-size:12px;color:var(--mut);margin-top:4px}
   .pcard .price{font-weight:800;color:var(--green);margin-top:4px}
   .pill{display:inline-block;background:var(--green-50);color:var(--green);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
+
+  /* coming soon */
+  .coming{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:55vh;text-align:center;color:var(--mut)}
+  .coming .big{font-size:52px;margin-bottom:8px}
+  .coming h2{color:var(--navy);margin:0 0 6px;font-size:24px;font-weight:800}
+  .coming p{margin:0 0 22px;max-width:420px}
+  .coming .tag{background:#f1f5f9;color:var(--navy);padding:6px 16px;border-radius:999px;font-weight:800;font-size:13px}
+
+  /* settings (RBAC) */
+  .adduser{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;margin-bottom:16px;padding:14px;border:1px solid var(--line);border-radius:10px;background:#f8fafc}
+  .adduser .field{margin-bottom:0;flex:1;min-width:130px}
+  .roleSel{padding:6px 9px;border:1px solid var(--line);border-radius:7px;font:inherit;font-size:12.5px;background:#fff}
+  .role-badge{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11px;font-weight:700}
+  .role-admin{background:#ede9fe;color:#6b21a8}
+  .role-sales{background:#eaf3fc;color:#2b6cb0}
+  .role-warehouse{background:#e6f6ef;color:#276749}
 </style>
 </head>
 <body>
-<div class="topbar">
-  <div class="brand"><span class="logo">O</span> Octarine</div>
-  <nav class="topnav">
-    <span class="home">Beranda</span> <span class="sep">/</span> <span>11</span> <span class="sep">/</span>
-    <span>HI</span> <span class="sep">/</span> <span>Hanif IT</span> <span class="sep">/</span> <span>Admin</span>
-  </nav>
-  <div class="topright">
-    <span class="bell">🔔<span class="n">11</span></span>
-    <span class="avatar">HI</span>
-    <span class="uname"><b>Hanif IT</b><span>Admin</span></span>
+
+<!-- ===================== AUTH ===================== -->
+<div id="authWrap" class="auth" style="display:none">
+  <!-- login -->
+  <div id="loginCard" class="acard">
+    <div class="brand"><span class="logo">O</span> Octarine</div>
+    <div class="sub">Fulfillment Portal — silakan masuk</div>
+    <form onsubmit="doLogin(event)">
+      <div class="field"><label>Username</label><input id="loginUser" autocomplete="username"></div>
+      <div class="field"><label>Password</label><input id="loginPass" type="password" autocomplete="current-password"></div>
+      <div class="err" id="loginErr"></div>
+      <button class="btn-primary" style="width:100%;padding:11px">Masuk</button>
+    </form>
+    <div class="authfoot">Belum punya akun? <span class="link" onclick="showRegister()">Daftar di sini</span></div>
+  </div>
+
+  <!-- register -->
+  <div id="registerCard" class="acard" style="display:none">
+    <div class="brand"><span class="logo">O</span> Octarine</div>
+    <div class="sub">Buat akun baru (role default: Tim Sales)</div>
+    <form onsubmit="doRegister(event)">
+      <div class="field"><label>Nama Lengkap</label><input id="regName"></div>
+      <div class="field"><label>Username</label><input id="regUser" autocomplete="username"></div>
+      <div class="field"><label>Email</label><input id="regEmail" type="email"></div>
+      <div class="field"><label>Password</label><input id="regPass" type="password" autocomplete="new-password"></div>
+      <div class="err" id="regErr"></div>
+      <button class="btn-primary" style="width:100%;padding:11px">Daftar</button>
+    </form>
+    <div class="authfoot">Sudah punya akun? <span class="link" onclick="showLogin()">Masuk</span></div>
   </div>
 </div>
 
-<div class="wrap">
-  <aside class="side">
-    <div class="grp">Menu</div>
-    <a href="#" data-view="product">🏷️ Master Data Product</a>
-    <a href="#" data-view="sales">📦 Outbound Sales</a>
-    <a href="#">📥 Inbound</a>
-    <a href="#">📦 Inventory</a>
-    <a href="#">📊 Report</a>
-    <a href="#">⚙️ Settings</a>
-  </aside>
+<!-- ===================== APP ===================== -->
+<div id="appWrap" style="display:none">
+  <div class="topbar">
+    <div class="brand"><span class="logo">O</span> Octarine</div>
+    <div class="topright">
+      <span class="avatar" id="myAvatar">—</span>
+      <span class="uname"><b id="myName">—</b><span id="myRole">—</span></span>
+      <button class="btn-outline" onclick="doLogout()">Keluar</button>
+    </div>
+  </div>
 
-  <main class="main">
-    <!-- ===== OUTBOUND SALES ===== -->
-    <section id="view-sales" style="display:none">
-      <div class="crumb">Home / Outbound / <b>Transaksi Penjualan</b> / Pesanan</div>
-      <div class="pagehead">
-        <h1>Transaksi Penjualan</h1>
-        <div class="spacer"></div>
-        <button class="btn-outline">Import</button>
-        <button class="btn-outline">Export</button>
-        <button class="btn-primary">Tambah Order</button>
-      </div>
+  <div class="wrap">
+    <aside class="side" id="side"></aside>
 
-      <div class="kpi-block">
-        <div class="kpi-title">Sales Order</div>
-        <div class="kpi-grid" id="kpiOrder">
-          <div class="kpi"><div class="lbl">On Process</div><div class="val">—</div></div>
-          <div class="kpi"><div class="lbl">On Picking</div><div class="val">—</div></div>
-          <div class="kpi"><div class="lbl">On Packing</div><div class="val">—</div></div>
-          <div class="kpi"><div class="lbl">Packed</div><div class="val">—</div></div>
+    <main class="main">
+      <!-- ===== OUTBOUND SALES ===== -->
+      <section id="view-sales" style="display:none">
+        <div class="crumb">Home / Outbound / <b>Transaksi Penjualan</b></div>
+        <div class="pagehead">
+          <h1>Transaksi Penjualan</h1>
+          <div class="spacer"></div>
+          <button class="btn-outline" onclick="window.open('/api/export/orders')">⬇ Export</button>
+          <button class="btn-primary">Tambah Order</button>
         </div>
-      </div>
-      <div class="kpi-block">
-        <div class="kpi-title">Sales Product</div>
-        <div class="kpi-grid" id="kpiProduct">
-          <div class="kpi"><div class="lbl">On Process</div><div class="val">—</div></div>
-          <div class="kpi"><div class="lbl">On Picking</div><div class="val">—</div></div>
-          <div class="kpi"><div class="lbl">On Packing</div><div class="val">—</div></div>
-          <div class="kpi"><div class="lbl">Packed</div><div class="val">—</div></div>
+
+        <div class="kpi-block">
+          <div class="kpi-title">Sales Order</div>
+          <div class="kpi-grid" id="kpiOrder">
+            <div class="kpi"><div class="lbl">On Process</div><div class="val">—</div></div>
+            <div class="kpi"><div class="lbl">On Picking</div><div class="val">—</div></div>
+            <div class="kpi"><div class="lbl">On Packing</div><div class="val">—</div></div>
+            <div class="kpi"><div class="lbl">Packed</div><div class="val">—</div></div>
+          </div>
         </div>
-      </div>
+        <div class="kpi-block">
+          <div class="kpi-title">Sales Product</div>
+          <div class="kpi-grid" id="kpiProduct">
+            <div class="kpi"><div class="lbl">On Process</div><div class="val">—</div></div>
+            <div class="kpi"><div class="lbl">On Picking</div><div class="val">—</div></div>
+            <div class="kpi"><div class="lbl">On Packing</div><div class="val">—</div></div>
+            <div class="kpi"><div class="lbl">Packed</div><div class="val">—</div></div>
+          </div>
+        </div>
 
-      <div class="tabs">
-        <button class="tab active">Pesanan <span class="cnt" id="tabAll">0</span></button>
-        <button class="tab">Siap Diproses <span class="cnt" id="tabProcess">0</span></button>
-        <button class="tab">Picking <span class="cnt" id="tabPick">0</span></button>
-        <button class="tab">Packing <span class="cnt" id="tabPack">0</span></button>
-        <button class="tab">Ready to Pickup <span class="cnt">0</span></button>
-        <button class="tab">Request Cancel <span class="cnt" id="tabCancel">0</span></button>
-        <button class="tab">Pending <span class="cnt" id="tabPending">0</span></button>
-      </div>
+        <div class="tabs">
+          <button class="tab active">Pesanan <span class="cnt" id="tabAll">0</span></button>
+          <button class="tab">Siap Diproses <span class="cnt" id="tabProcess">0</span></button>
+          <button class="tab">Picking <span class="cnt" id="tabPick">0</span></button>
+          <button class="tab">Packing <span class="cnt" id="tabPack">0</span></button>
+          <button class="tab">Ready to Pickup <span class="cnt">0</span></button>
+          <button class="tab">Request Cancel <span class="cnt" id="tabCancel">0</span></button>
+          <button class="tab">Pending <span class="cnt" id="tabPending">0</span></button>
+        </div>
 
-      <div class="bulk">
-        <button>Sync</button><button>Print</button><button>Proses Order</button>
-        <button>Set Order Paid</button><button>Cancel Order</button><button>Fake Order</button>
-      </div>
+        <div class="bulk">
+          <button>Sync</button><button>Print</button><button>Proses Order</button>
+          <button>Set Order Paid</button><button>Cancel Order</button><button>Fake Order</button>
+        </div>
 
-      <div class="tblwrap">
-        <table id="orderTable">
-          <thead><tr><th>Tgl. Order</th><th>Batas Waktu Proses</th><th>Penerima</th><th>Lokasi</th><th>Qty</th><th>Total</th><th>Sumber</th><th>Pengiriman</th><th>Status</th><th>Aksi</th></tr></thead>
-          <tbody><tr><td colspan="10" style="color:var(--mut)">Memuat…</td></tr></tbody>
-        </table>
-      </div>
-    </section>
+        <div class="tblwrap">
+          <table id="orderTable">
+            <thead><tr><th>Tgl. Order</th><th>Batas Waktu Proses</th><th>Penerima</th><th>Lokasi</th><th>Qty</th><th>Total</th><th>Sumber</th><th>Pengiriman</th><th>Status</th><th>Aksi</th></tr></thead>
+            <tbody><tr><td colspan="10" style="color:var(--mut)">Memuat…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
 
-    <!-- ===== MASTER DATA / PRODUCT ===== -->
-    <section id="view-product">
-      <div class="crumb">Home / Master Data / <b>Daftar Produk</b></div>
-      <div class="pagehead">
-        <h1>Daftar Produk</h1>
-        <div class="spacer"></div>
-        <button class="btn-outline">Import</button>
-        <button class="btn-outline">Export</button>
-        <button class="btn-primary">Tambah</button>
-      </div>
+      <!-- ===== MASTER DATA / PRODUCT ===== -->
+      <section id="view-product" style="display:none">
+        <div class="crumb">Home / Master Data / <b>Daftar Produk</b></div>
+        <div class="pagehead">
+          <h1>Daftar Produk</h1>
+          <div class="spacer"></div>
+          <button class="btn-outline" onclick="window.open('/api/export/products')">⬇ Export</button>
+          <button class="btn-primary">Tambah</button>
+        </div>
 
-      <div class="tabs">
-        <button class="tab active">Group Produk</button>
-        <button class="tab">Variant Produk</button>
-      </div>
+        <div class="tabs">
+          <button class="tab active">Group Produk</button>
+          <button class="tab">Variant Produk</button>
+        </div>
 
-      <div class="pcards" id="productList"></div>
-    </section>
-  </main>
+        <div class="pcards" id="productList"></div>
+      </section>
+
+      <!-- ===== SETTINGS / RBAC ===== -->
+      <section id="view-settings" style="display:none">
+        <div class="crumb">Home / <b>Settings — User & Role</b></div>
+        <div class="pagehead"><h1>Manajemen User & Role</h1></div>
+
+        <div class="adduser">
+          <div class="field"><label>Nama</label><input id="newName" placeholder="Nama lengkap"></div>
+          <div class="field"><label>Username</label><input id="newUser" placeholder="username"></div>
+          <div class="field"><label>Password</label><input id="newPass" type="password" placeholder="min 6"></div>
+          <div class="field"><label>Role</label>
+            <select id="newRole">
+              <option value="sales">Tim Sales</option>
+              <option value="warehouse">Tim Gudang</option>
+              <option value="admin">Super Admin</option>
+            </select>
+          </div>
+          <button class="btn-primary" onclick="addUser(event)">Tambah User</button>
+        </div>
+
+        <div class="tblwrap">
+          <table>
+            <thead><tr><th>Username</th><th>Nama</th><th>Email</th><th>Role</th><th>Status</th></tr></thead>
+            <tbody id="userList"><tr><td colspan="5" style="color:var(--mut)">Memuat…</td></tr></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ===== COMING SOON ===== -->
+      <section id="view-coming" style="display:none">
+        <div class="coming">
+          <div class="big">🚧</div>
+          <h2 id="comingTitle">Coming Soon</h2>
+          <p>Modul ini sedang dalam pengembangan dan akan segera tersedia.</p>
+          <span class="tag">Coming Soon</span>
+        </div>
+      </section>
+    </main>
+  </div>
 </div>
 
 <script>
 const $ = s => document.querySelector(s);
-const token = localStorage.getItem('perpack_token') || '';
-const H = {'Authorization': token, 'Content-Type':'application/json'};
-async function api(p, o={}){ o.headers={...H,...(o.headers||{})}; const r=await fetch(p,o); if(!r.ok)throw new Error('HTTP '+r.status); return r.json(); }
+const $$ = s => document.querySelectorAll(s);
+let TOKEN = localStorage.getItem('perpack_token') || '';
+let USER = null;
+let VIEW = 'sales';
+
+const ROLE_LABEL = {admin:'Super Admin', sales:'Tim Sales', warehouse:'Tim Gudang'};
+const PAGES = [
+  {key:'sales',    label:'Outbound Sales', icon:'📦', roles:['admin','sales']},
+  {key:'product',  label:'Master Data',    icon:'🏷️', roles:['admin','warehouse']},
+  {key:'inbound',  label:'Inbound',        icon:'📥', comingSoon:true},
+  {key:'inventory',label:'Inventory',      icon:'📦', comingSoon:true},
+  {key:'report',   label:'Report',         icon:'📊', comingSoon:true},
+  {key:'settings', label:'Settings',       icon:'⚙️', roles:['admin']},
+];
+
+function authHeaders(){ const h={'Content-Type':'application/json'}; if(TOKEN) h['Authorization']='Bearer '+TOKEN; return h; }
+async function api(p, o={}){
+  o.headers={...authHeaders(),...(o.headers||{})};
+  const r = await fetch(p,o);
+  let j = null; try{ j = await r.json(); }catch(e){}
+  if(!r.ok) throw new Error((j && j.msg && j.msg.id) || ('HTTP '+r.status));
+  return j;
+}
+
+/* ---- auth screen ---- */
+function showAuth(){ $('#appWrap').style.display='none'; $('#authWrap').style.display=''; showLogin(); }
+function showLogin(){ $('#loginCard').style.display=''; $('#registerCard').style.display='none'; }
+function showRegister(){ $('#loginCard').style.display='none'; $('#registerCard').style.display=''; }
+
+async function doLogin(ev){
+  ev.preventDefault();
+  const u=$('#loginUser').value.trim(), p=$('#loginPass').value;
+  try{
+    const r=await fetch('/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:u,password:p})});
+    const d=await r.json();
+    if(!r.ok) throw new Error((d.msg&&d.msg.id)||'Login gagal');
+    TOKEN=d.data.token; localStorage.setItem('perpack_token',TOKEN);
+    await boot();
+  }catch(e){ $('#loginErr').textContent=e.message; }
+}
+
+async function doRegister(ev){
+  ev.preventDefault();
+  const body={username:$('#regUser').value.trim(), password:$('#regPass').value, name:$('#regName').value.trim(), email:$('#regEmail').value.trim()};
+  try{
+    const r=await fetch('/api/auth/register',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    const d=await r.json();
+    if(!r.ok) throw new Error((d.msg&&d.msg.id)||'Registrasi gagal');
+    $('#loginUser').value=body.username; $('#loginPass').value=body.password;
+    $('#regName').value=''; $('#regUser').value=''; $('#regEmail').value=''; $('#regPass').value='';
+    showLogin(); $('#loginErr').textContent='Registrasi berhasil. Silakan masuk.';
+  }catch(e){ $('#regErr').textContent=e.message; }
+}
+
+async function doLogout(){
+  try{ await fetch('/api/auth/logout',{method:'POST',headers:{'Authorization':'Bearer '+TOKEN}}); }catch(e){}
+  TOKEN=''; USER=null; localStorage.removeItem('perpack_token');
+  showAuth();
+}
+
+/* ---- boot ---- */
+async function boot(){
+  if(TOKEN){
+    try{
+      const r=await fetch('/api/auth/me',{headers:{'Authorization':'Bearer '+TOKEN}});
+      const d=await r.json();
+      if(r.ok && d.code===200){ USER=d.data; renderApp(); return; }
+    }catch(e){}
+    TOKEN=''; localStorage.removeItem('perpack_token');
+  }
+  showAuth();
+}
+
+function renderApp(){
+  $('#authWrap').style.display='none'; $('#appWrap').style.display='';
+  $('#myName').textContent = USER.name || USER.username;
+  $('#myRole').textContent = ROLE_LABEL[USER.role] || USER.role;
+  $('#myAvatar').textContent = (USER.name||USER.username||'?').slice(0,2).toUpperCase();
+
+  const visible = PAGES.filter(p => p.comingSoon || (p.roles && p.roles.includes(USER.role)));
+  let html = '<div class="grp">Menu</div>';
+  for(const p of visible){
+    html += `<a href="#" data-view="${p.key}"><span>${p.icon} ${p.label}</span>${p.comingSoon?'<span class="soon">Coming Soon</span>':''}</a>`;
+  }
+  $('#side').innerHTML = html;
+  $$('#side a[data-view]').forEach(a=>a.onclick=()=>showView(a.dataset.view));
+
+  if(!visible.some(p=>p.key===VIEW)) VIEW = (visible.find(p=>!p.comingSoon)||visible[0]||{}).key || 'sales';
+  showView(VIEW);
+}
 
 function showView(v){
-  $('#view-sales').style.display = v==='sales'?'':'none';
-  $('#view-product').style.display = v==='product'?'':'none';
-  document.querySelectorAll('.side a[data-view]').forEach(a=>a.classList.toggle('active', a.dataset.view===v));
-  if(v==='sales') loadSales();
-  if(v==='product') loadProducts();
+  VIEW = v;
+  ['sales','product','settings','coming'].forEach(k=>{ const el=$('#view-'+k); if(el) el.style.display='none'; });
+  $$('#side a[data-view]').forEach(a=>a.classList.toggle('active', a.dataset.view===v));
+  if(v==='sales'){ $('#view-sales').style.display=''; loadSales(); }
+  else if(v==='product'){ $('#view-product').style.display=''; loadProducts(); }
+  else if(v==='settings'){ $('#view-settings').style.display=''; loadUsers(); }
+  else {
+    const p=PAGES.find(x=>x.key===v);
+    $('#view-coming').style.display='';
+    $('#comingTitle').textContent = p ? p.label : 'Coming Soon';
+  }
 }
-document.querySelectorAll('.side a[data-view]').forEach(a=>a.onclick=()=>showView(a.dataset.view));
 
+/* ---- sales ---- */
 async function loadSales(){
   try{
     const j = await api('/api/to-be/sales-summary');
-    const d = j.data, o = d.sales_order, p = d.sales_product;
-    const set = (id, vals) => {
-      const keys = ['on_process','on_picking','on_packing','packed'];
-      document.querySelectorAll('#'+id+' .val').forEach((el,i)=>el.textContent = (vals[keys[i]]??0).toLocaleString('id-ID'));
-    };
-    set('kpiOrder', o); set('kpiProduct', p);
-    $('#tabAll').textContent = d.total_orders;
-    $('#tabProcess').textContent = o.on_process;
-    $('#tabPick').textContent = o.on_picking;
-    $('#tabPack').textContent = o.on_packing;
+    const d=j.data, o=d.sales_order, p=d.sales_product;
+    const keys=['on_process','on_picking','on_packing','packed'];
+    $$('#kpiOrder .val').forEach((el,i)=>el.textContent=(o[keys[i]]??0).toLocaleString('id-ID'));
+    $$('#kpiProduct .val').forEach((el,i)=>el.textContent=(p[keys[i]]??0).toLocaleString('id-ID'));
+    $('#tabAll').textContent=d.total_orders;
+    $('#tabProcess').textContent=o.on_process;
+    $('#tabPick').textContent=o.on_picking;
+    $('#tabPack').textContent=o.on_packing;
 
-    const r = await api('/v1/orders/page', {method:'POST', body:JSON.stringify({page:1,length:100})});
-    const rows = r.data.map(x=>`<tr>
+    const r = await api('/v1/orders/page',{method:'POST',body:JSON.stringify({page:1,length:100})});
+    const rows=r.data.map(x=>`<tr>
       <td>${(x.order_at||'').slice(0,10)}</td>
       <td>${(x.deadline_at||'').slice(0,10)}</td>
       <td>${x.customer_name||'—'}</td>
@@ -220,21 +403,22 @@ async function loadSales(){
       <td>${x.qty}</td>
       <td>Rp ${(x.amount||0).toLocaleString('id-ID')}</td>
       <td>${x.channel_name||'—'}</td>
-      <td>${x.courier||'—'}<br><span style="color:var(--mut);font-size:11px">${x.courier_label||''}</span></td>
+      <td>${x.courier||'—'}</td>
       <td><span class="st ${x.status}">${x.status}</span></td>
       <td><span class="link">Detail</span></td></tr>`).join('');
     $('#orderTable tbody').innerHTML = rows || '<tr><td colspan="10" style="color:var(--mut)">tidak ada data</td></tr>';
-  }catch(e){ $('#orderTable tbody').innerHTML = `<tr><td colspan="10" style="color:var(--red,#e53e3e)">Error: ${e.message}</td></tr>`; }
+  }catch(e){ $('#orderTable tbody').innerHTML=`<tr><td colspan="10" style="color:var(--red)">Error: ${e.message}</td></tr>`; }
 }
 
+/* ---- products ---- */
 async function loadProducts(){
   try{
     const j = await api('/v1/products/group/page?page=1&length=100');
     $('#productList').innerHTML = j.data.map(g=>{
-      const v = g.variants[0] || {};
-      const img = (v.images&&v.images[0]&&v.images[0].url) || g.thumbnail || '';
-      const price = (g.sell_price_min||0) > 0 ? `Rp ${(g.sell_price_min||0).toLocaleString('id-ID')} – Rp ${(g.sell_price_max||0).toLocaleString('id-ID')}` : '-';
-      const bundle = g.variants.filter(x=>x.is_bundle).length;
+      const v=g.variants[0]||{};
+      const img=(v.images&&v.images[0]&&v.images[0].url)||g.thumbnail||'';
+      const price=(g.sell_price_min||0)>0?`Rp ${(g.sell_price_min||0).toLocaleString('id-ID')} – Rp ${(g.sell_price_max||0).toLocaleString('id-ID')}`:'-';
+      const bundle=g.variants.filter(x=>x.is_bundle).length;
       return `<div class="pcard">
         ${img?`<img class="thumb" src="${img}" alt="">`:'<div class="thumb"></div>'}
         <div>
@@ -245,10 +429,46 @@ async function loadProducts(){
         </div>
       </div>`;
     }).join('');
-  }catch(e){ $('#productList').innerHTML = `<div style="color:var(--red,#e53e3e)">Error: ${e.message}</div>`; }
+  }catch(e){ $('#productList').innerHTML=`<div style="color:var(--red)">Error: ${e.message}</div>`; }
 }
 
-showView('product');
+/* ---- settings / RBAC ---- */
+async function loadUsers(){
+  try{
+    const j = await api('/api/auth/users');
+    $('#userList').innerHTML = j.data.map(u=>`<tr>
+      <td><b>${u.username}</b></td>
+      <td>${u.name||'—'}</td>
+      <td>${u.email||'—'}</td>
+      <td>
+        ${u.username==='admin' && u.role==='admin'
+          ? '<span class="role-badge role-admin">Super Admin</span>'
+          : `<select class="roleSel" data-id="${u.id}" onchange="changeRole(this)">
+              ${['admin','sales','warehouse'].map(r=>`<option value="${r}" ${r===u.role?'selected':''}>${ROLE_LABEL[r]}</option>`).join('')}
+            </select>`}
+      </td>
+      <td>${u.status}</td></tr>`).join('');
+  }catch(e){ $('#userList').innerHTML=`<tr><td colspan="5" style="color:var(--red)">${e.message}</td></tr>`; }
+}
+
+async function changeRole(sel){
+  try{
+    await api(`/api/auth/users/${sel.dataset.id}/role`,{method:'PATCH',body:JSON.stringify({role:sel.value})});
+  }catch(e){ alert(e.message); loadUsers(); }
+}
+
+async function addUser(ev){
+  ev.preventDefault();
+  const u=$('#newUser').value.trim(), p=$('#newPass').value;
+  if(!u||!p){ alert('Username & password wajib'); return; }
+  try{
+    await api('/api/auth/register',{method:'POST',body:JSON.stringify({username:u,password:p,name:$('#newName').value.trim(),role:$('#newRole').value})});
+    $('#newName').value=''; $('#newUser').value=''; $('#newPass').value='';
+    loadUsers();
+  }catch(e){ alert(e.message); }
+}
+
+boot();
 </script>
 </body>
 </html>

@@ -14,6 +14,7 @@ Envelope: {"code":200,"msg":{"id":"Sukses","en":"Success"},"data":...,"metadata"
 """
 import base64
 import hashlib
+import io
 import json
 import math
 import os
@@ -25,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -82,7 +83,7 @@ def require_auth(authorization: str = Header(None)):
 
 # ============================ User & Role (RBAC + Access Control) ============================
 
-ROLES = ("admin", "operator", "viewer")
+ROLES = ("admin", "sales", "warehouse")
 AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "0") == "1"   # 1 = mutasi wajib token; 0 = demo terbuka
 
 
@@ -147,17 +148,14 @@ def require_role(*roles):
 
 
 def require_write():
-    """Dependency mutasi: AUTH_ENFORCED=1 -> wajib admin/operator; kalau 0 -> demo terbuka."""
+    """Dependency mutasi: AUTH_ENFORCED=1 -> wajib login (role aktif apa pun); kalau 0 -> demo terbuka."""
     def dep(authorization: str = Header(None)):
         if not AUTH_ENFORCED:
-            return {"role": "operator", "guest": True}
+            return {"role": "guest", "guest": True}
         user = current_user(authorization)
         if not user:
             raise HTTPException(401, detail=_auth_err(
                 401, "Autentikasi diperlukan (token tidak valid/kadaluarsa)", "Authentication required"))
-        if user["role"] not in ("admin", "operator"):
-            raise HTTPException(403, detail=_auth_err(
-                403, "Akses ditolak: role tidak cukup", "Insufficient role"))
         return user
     return dep
 
@@ -178,13 +176,13 @@ def auth_register(body: dict = None, authorization: str = Header(None)):
         raise HTTPException(422, detail=_auth_err(422, "password minimal 6 karakter", "password min 6 chars"))
     if q1("SELECT id FROM users WHERE username=?", (username,)):
         raise HTTPException(409, detail=_auth_err(409, "username sudah terdaftar", "username already exists"))
-    role = (body.get("role") or "viewer").lower()
+    role = (body.get("role") or "sales").lower()
     if role not in ROLES:
-        role = "viewer"
-    if role != "viewer":
-        admin = current_user(authorization)   # naikkan role hanya oleh admin
+        role = "sales"
+    if role != "sales":
+        admin = current_user(authorization)   # role admin/warehouse hanya oleh admin
         if not admin or admin["role"] != "admin":
-            role = "viewer"
+            role = "sales"
     c = conn()
     cur = c.execute("INSERT INTO users (username, email, name, password_hash, role, status) "
                     "VALUES (?,?,?,?,?, 'active')",
@@ -229,6 +227,19 @@ def auth_set_role(user_id: int, body: dict = None, _=Depends(require_role("admin
     if cur.rowcount == 0:
         raise HTTPException(404, detail=_auth_err(404, "User tidak ditemukan", "User not found"))
     return env({"updated": True, "user_id": user_id, "role": role})
+
+
+@app.post("/api/auth/logout")
+def auth_logout(authorization: str = Header(None)):
+    t = (authorization or "").strip()
+    if t.lower().startswith("bearer "):
+        t = t[7:].strip()
+    if t:
+        c = conn()
+        c.execute("DELETE FROM auth_tokens WHERE token_hash=?", (hashlib.sha256(t.encode()).hexdigest(),))
+        c.commit()
+        c.close()
+    return env({"logged_out": True})
 
 
 # ============================ DB ============================
@@ -627,6 +638,53 @@ def sales_summary():
         "sales_product": agg("qty"),
         "total_orders": sum(v["order"] for v in by.values()),
     })
+
+
+# ============================ Export Excel ============================
+
+@app.get("/api/export/orders")
+def export_orders():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+    rows = q("SELECT reference_no, order_at, deadline_at, customer_name, warehouse_name, "
+             "qty, amount, channel_name, courier, status FROM orders ORDER BY id DESC")
+    wb = Workbook(); ws = wb.active; ws.title = "Outbound Sales"
+    headers = ["Reference No", "Tgl Order", "Deadline", "Penerima", "Lokasi", "Qty", "Total", "Sumber", "Kurir", "Status"]
+    ws.append(headers)
+    for r in rows:
+        ws.append([r["reference_no"], (r["order_at"] or "")[:19], (r["deadline_at"] or "")[:19],
+                   r["customer_name"], r["warehouse_name"], r["qty"], r["amount"],
+                   r["channel_name"], r["courier"], r["status"]])
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    for i, w in enumerate([26, 20, 20, 20, 14, 8, 14, 14, 14, 12], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    buf = io.BytesIO(); wb.save(buf)
+    return Response(content=buf.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename=outbound_sales.xlsx"})
+
+
+@app.get("/api/export/products")
+def export_products():
+    from openpyxl import Workbook
+    from openpyxl.styles import Font
+    from openpyxl.utils import get_column_letter
+    rows = q("SELECT id, name, sku, sku_code, sell_price, is_bundle FROM product_variants ORDER BY id")
+    wb = Workbook(); ws = wb.active; ws.title = "Master Data Produk"
+    ws.append(["ID", "Nama", "SKU", "SKU Code", "Harga Jual", "Bundle"])
+    for r in rows:
+        ws.append([r["id"], r["name"], r["sku"], r["sku_code"], r["sell_price"],
+                   "Ya" if r["is_bundle"] else "Tidak"])
+    for c in ws[1]:
+        c.font = Font(bold=True)
+    for i, w in enumerate([8, 40, 28, 20, 14, 10], 1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    buf = io.BytesIO(); wb.save(buf)
+    return Response(content=buf.getvalue(),
+                    media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    headers={"Content-Disposition": "attachment; filename=master_data_product.xlsx"})
 
 
 @app.get("/", response_class=HTMLResponse)
