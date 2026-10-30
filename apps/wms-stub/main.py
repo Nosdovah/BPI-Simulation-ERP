@@ -482,13 +482,22 @@ async def webhook_wms(body: dict = None, actor=Depends(require_write())):
     event = body.get("event", "")
     data = body.get("data") or {}
     event_id = body.get("event_id") or f"evt-{int(time.time() * 1000)}"
+    # idempotence: event_id sudah pernah diproses -> jangan mutasi ulang (cegah dobel potong)
+    c = conn()
+    dup = c.execute("SELECT effect FROM webhook_events WHERE event_id=?", (event_id,)).fetchone()
+    if dup:
+        c.close()
+        total = q1("SELECT COUNT(*) c FROM webhook_events")["c"]
+        return env({"applied": False, "event": event, "event_id": event_id,
+                    "note": "event_id sudah diproses (idempotent)",
+                    "effect": json.loads(dup["effect"]) if dup["effect"] else None,
+                    "total_events": total})
     if event in ("stock.updated", "inventory.updated"):
         effect = apply_stock_update(data)
     elif event in ("order.status_changed", "order.status_updated", "order.updated"):
         effect = apply_order_status(data)
     else:
         effect = {"applied": False, "note": f"event {event!r} diterima (ping/unknown) — tanpa mutasi DB"}
-    c = conn()
     cur = c.execute("INSERT INTO webhook_events (event_id, event, payload, applied, effect) "
                     "VALUES (?,?,?,?,?)",
                     (event_id, event, json.dumps(body, ensure_ascii=False),
@@ -533,9 +542,65 @@ async def webhook_catalog(page: int = 1, length: int = 250):
     return env(data, pagemeta(page, length, count))
 
 
+def _resolve_check_deduct_stock(cur, items):
+    """Atomik: resolve item -> kebutuhan stok (ekspansi BOM), cek ketersediaan, lalu potong.
+    Semua via cursor `cur`; commit/rollback oleh pemanggil. Return (ok, info)."""
+    need, detail = {}, []
+    for it in items:
+        sku = (it.get("sku") or "").strip()
+        try:
+            qty = int(it.get("qty") or 1)
+        except (TypeError, ValueError):
+            qty = 0
+        if not sku or qty <= 0:
+            return False, {"error": "SKU kosong / qty invalid", "sku": sku or None}
+        v = cur.execute("SELECT id, sku, is_bundle FROM product_variants WHERE sku=? OR alias=?",
+                        (sku, sku)).fetchone()
+        if not v:
+            return False, {"error": "SKU tidak ditemukan", "sku": sku}
+        if v["is_bundle"]:
+            comps = cur.execute("SELECT component_sku, multiplier_qty FROM variant_components WHERE variant_id=?",
+                                (v["id"],)).fetchall()
+            detail.append({"sku": sku, "qty": qty, "bundle": True,
+                           "components": [{"component_sku": c["component_sku"], "multiplier_qty": c["multiplier_qty"]} for c in comps]})
+            if not comps:
+                need[v["sku"]] = need.get(v["sku"], 0) + qty
+            else:
+                for c in comps:
+                    need[c["component_sku"]] = need.get(c["component_sku"], 0) + qty * c["multiplier_qty"]
+        else:
+            need[v["sku"]] = need.get(v["sku"], 0) + qty
+            detail.append({"sku": sku, "qty": qty, "bundle": False, "components": []})
+
+    insufficient = []
+    for sku, qty_needed in need.items():
+        avail = cur.execute(
+            "SELECT COALESCE(SUM(vs.available),0) s FROM variant_stocks vs "
+            "JOIN product_variants pv ON pv.id=vs.variant_id WHERE pv.sku=?", (sku,)).fetchone()["s"]
+        if avail < qty_needed:
+            insufficient.append({"sku": sku, "needed": qty_needed, "available": avail})
+    if insufficient:
+        return False, {"error": "Stok tidak cukup", "insufficient": insufficient}
+
+    for sku, qty_needed in need.items():
+        rows = cur.execute(
+            "SELECT vs.variant_id, vs.warehouse_id, vs.available FROM variant_stocks vs "
+            "JOIN product_variants pv ON pv.id=vs.variant_id WHERE pv.sku=? AND vs.available>0 "
+            "ORDER BY vs.available DESC", (sku,)).fetchall()
+        remaining = qty_needed
+        for r in rows:
+            if remaining <= 0:
+                break
+            take = min(r["available"], remaining)
+            cur.execute("UPDATE variant_stocks SET available=available-? WHERE variant_id=? AND warehouse_id=?",
+                        (take, r["variant_id"], r["warehouse_id"]))
+            remaining -= take
+    return True, {"resolved": detail, "deducted": need}
+
+
 @app.post("/api/webhooks/purchase-order")
 async def webhook_purchase_order(body: dict = None, actor=Depends(require_write())):
-    """Terima purchase order baru dari storefront -> buat order di DB (status awal)."""
+    """Terima PO + potong stok DALAM SATU TRANSAKSI (atomik, idempoten by reference_no)."""
     body = body if isinstance(body, dict) else {}
     ref = (body.get("reference_no") or body.get("order_ref") or body.get("ref")
            or f"ORD-WEBSTORE-PROD-{int(time.time())}")
@@ -551,29 +616,52 @@ async def webhook_purchase_order(body: dict = None, actor=Depends(require_write(
                      for it in items)
     status = body.get("status") or "paid"
     chan_name = body.get("channel") or "WEBSTORE"
-    chan_id = body.get("channel_id")
-    if chan_id is None:
-        ch = q1("SELECT id FROM channels WHERE name=?", (chan_name,))
-        chan_id = ch["id"] if ch else 13
-    exist = q1("SELECT id FROM orders WHERE reference_no=?", (ref,))
-    if exist:
-        return env({"applied": False, "note": f"reference_no {ref} sudah ada", "order_id": exist["id"]})
+
     c = conn()
-    cur = c.execute(
-        "INSERT INTO orders (reference_no, order_at, created_at, channel_name, channel_id, "
-        "customer_name, customer_phone, customer_email, qty, amount, product_summary, status, "
-        "is_cod, is_fake_order) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
-        (ref, chan_name, chan_id, body.get("customer_name") or "", body.get("customer_phone") or "",
-         body.get("customer_email") or "", qty, int(amount or 0), product_summary, status))
-    oid = cur.lastrowid
-    cur.execute("INSERT INTO webhook_events (event_id, event, payload, applied, effect) VALUES (?,?,?,?,?)",
-                (body.get("event_id") or f"evt-po-{int(time.time() * 1000)}", "purchase-order.created",
-                 json.dumps(body, ensure_ascii=False), 1,
-                 json.dumps({"order_id": oid, "reference_no": ref, "status": status})))
-    c.commit()
-    c.close()
+    cur = c.cursor()
+    try:
+        chan_id = body.get("channel_id")
+        if chan_id is None:
+            ch = cur.execute("SELECT id FROM channels WHERE name=?", (chan_name,)).fetchone()
+            chan_id = ch["id"] if ch else 13
+
+        # idempotence (retry reference_no sama -> kembalikan order lama, tanpa potong ulang)
+        exist = cur.execute("SELECT id, status FROM orders WHERE reference_no=?", (ref,)).fetchone()
+        if exist:
+            c.close()
+            return env({"applied": False, "note": f"reference_no {ref} sudah ada (idempotent)",
+                        "order_id": exist["id"], "status": exist["status"]})
+
+        ok, info = _resolve_check_deduct_stock(cur, items)
+        if not ok:
+            c.rollback()
+            c.close()
+            return JSONResponse(status_code=409, content={
+                "code": 409,
+                "msg": {"id": info.get("error", "Stok tidak cukup"),
+                        "en": info.get("error", "Insufficient stock")},
+                "data": info})
+
+        cur.execute(
+            "INSERT INTO orders (reference_no, order_at, created_at, channel_name, channel_id, "
+            "customer_name, customer_phone, customer_email, qty, amount, product_summary, status, "
+            "is_cod, is_fake_order) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+            (ref, chan_name, chan_id, body.get("customer_name") or "", body.get("customer_phone") or "",
+             body.get("customer_email") or "", qty, int(amount or 0), product_summary, status))
+        oid = cur.lastrowid
+        cur.execute("INSERT INTO webhook_events (event_id, event, payload, applied, effect) VALUES (?,?,?,?,?)",
+                    (body.get("event_id") or f"evt-po-{int(time.time() * 1000)}", "purchase-order.created",
+                     json.dumps(body, ensure_ascii=False), 1,
+                     json.dumps({"order_id": oid, "reference_no": ref, "status": status, "stock": info})))
+        c.commit()
+    except Exception:
+        c.rollback()
+        raise
+    finally:
+        c.close()
     return env({"applied": True, "order_id": oid, "reference_no": ref, "status": status,
-                "qty": qty, "amount": int(amount or 0), "product_summary": product_summary})
+                "qty": qty, "amount": int(amount or 0), "product_summary": product_summary,
+                "stock_deducted": info})
 
 
 # ============================ TO-BE — BOM virtual kitting ============================
