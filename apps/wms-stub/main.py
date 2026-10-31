@@ -530,6 +530,7 @@ def apply_order_status(data, event_timestamp=None):
 
 ERP_PUSH_URL = os.getenv("ERP_PUSH_WEBHOOK_URL", "")
 ERP_PUSH_SECRET = os.getenv("ERP_PUSH_WEBHOOK_SECRET", "")
+ERP_PUSH_TOKEN = os.getenv("ERP_PUSH_WEBHOOK_TOKEN", "")
 
 
 def _sign_payload(raw_body: str) -> str:
@@ -546,11 +547,13 @@ def _enqueue_push(event_id: str, event: str, data: dict):
         return {"pushed": False, "status": "skipped", "note": "ERP_PUSH_WEBHOOK_URL tidak diset"}
     c = conn()
     try:
-        r = httpx.post(ERP_PUSH_URL, content=raw.encode(),
-                       headers={"Content-Type": "application/json",
-                                "X-Perpack-Signature": sig,
-                                "X-Perpack-Event-Id": event_id,
-                                "X-Perpack-Timestamp": ts}, timeout=3.0)
+        headers = {"Content-Type": "application/json",
+                   "X-OSR-Signature": sig,
+                   "X-Perpack-Event-Id": event_id,
+                   "X-Perpack-Timestamp": ts}
+        if ERP_PUSH_TOKEN:
+            headers["Authorization"] = f"Bearer {ERP_PUSH_TOKEN}"
+        r = httpx.post(ERP_PUSH_URL, content=raw.encode(), headers=headers, timeout=3.0)
         status = "sent" if r.status_code < 300 else "failed"
         note = f"HTTP {r.status_code}"
         attempts = 1
@@ -629,6 +632,30 @@ async def push_outbox_list(limit: int = 50):
     rows = q("SELECT id, event_id, event, status, attempts, note, created_at FROM push_outbox "
              "ORDER BY id DESC LIMIT ?", (limit,))
     return env([dict(r) for r in rows])
+
+
+@app.get("/api/webhooks/stock-index")
+async def webhook_stock_index():
+    """Agregat sku -> stok tersedia (kompak ±40 KB, untuk live lookup storefront)."""
+    rows = q("SELECT pv.sku, COALESCE(SUM(vs.available),0) available "
+             "FROM product_variants pv "
+             "LEFT JOIN variant_stocks vs ON vs.variant_id=pv.id "
+             "WHERE pv.sku IS NOT NULL AND pv.sku != '' "
+             "GROUP BY pv.sku")
+    data = {r["sku"]: r["available"] for r in rows}
+    return env(data, {"count": len(data),
+                      "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+
+
+@app.post("/api/to-be/reconcile-orders")
+async def reconcile_orders(actor=Depends(require_write())):
+    """Penyapu order terbuka: isi sent_at utk order sent/completed yang masih kosong."""
+    c = conn()
+    n = c.execute("UPDATE orders SET sent_at = COALESCE(NULLIF(sent_at,''), updated_at) "
+                  "WHERE status IN ('sent','completed') AND (sent_at IS NULL OR sent_at='')").rowcount
+    c.commit()
+    c.close()
+    return env({"applied": True, "sent_at_filled": n})
 
 
 # ============================ Webhook untuk storefront ============================
