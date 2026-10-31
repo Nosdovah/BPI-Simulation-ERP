@@ -757,12 +757,14 @@ async def webhook_purchase_order(body: dict = None, actor=Depends(require_write(
                         "en": info.get("error", "Insufficient stock")},
                 "data": info})
 
+        shipping_fee = int(body.get("shipping_fee") or 0)
+        courier = body.get("courier") or None
         cur.execute(
             "INSERT INTO orders (reference_no, order_at, created_at, channel_name, channel_id, "
-            "customer_name, customer_phone, customer_email, qty, amount, product_summary, status, "
-            "is_cod, is_fake_order) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
+            "customer_name, customer_phone, customer_email, qty, amount, shipping_fee, courier, product_summary, status, "
+            "is_cod, is_fake_order) VALUES (?, strftime('%Y-%m-%dT%H:%M:%SZ','now'), strftime('%Y-%m-%dT%H:%M:%SZ','now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0)",
             (ref, chan_name, chan_id, body.get("customer_name") or "", body.get("customer_phone") or "",
-             body.get("customer_email") or "", qty, int(amount or 0), product_summary, status))
+             body.get("customer_email") or "", qty, int(amount or 0), shipping_fee, courier, product_summary, status))
         oid = cur.lastrowid
         cur.execute("INSERT INTO webhook_events (event_id, event, payload, applied, effect) VALUES (?,?,?,?,?)",
                     (body.get("event_id") or f"evt-po-{int(time.time() * 1000)}", "purchase-order.created",

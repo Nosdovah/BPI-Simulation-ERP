@@ -123,6 +123,19 @@ def main():
                      b(o.get("is_booking")), b(o.get("is_fake_order")),
                      o.get("status"), o.get("status_mp"), norm_ts(o.get("sent_at")), norm_ts(o.get("updated_at"))))
 
+    # --- Data-integrity gate: dedupe SKU + rapikan bundle tanpa komponen ---
+    # Sumber Perpack punya SKU ganda (produk beda berbagi SKU sama). Aturan:
+    # "keep MIN(id)" — salinan id terkecil yang dipertahankan, sisanya dibuang,
+    # lalu komponen/stok/gambar yatim ikut dibersihkan.
+    cur.execute("DELETE FROM product_variants WHERE sku IS NOT NULL AND sku != '' AND id NOT IN "
+                "(SELECT MIN(id) FROM product_variants WHERE sku IS NOT NULL AND sku != '' GROUP BY sku)")
+    cur.execute("DELETE FROM variant_components WHERE variant_id NOT IN (SELECT id FROM product_variants)")
+    cur.execute("DELETE FROM variant_stocks WHERE variant_id NOT IN (SELECT id FROM product_variants)")
+    cur.execute("DELETE FROM variant_images WHERE variant_id NOT IN (SELECT id FROM product_variants)")
+    # bundle tanpa komponen -> turunkan jadi produk biasa (bukan bundle)
+    cur.execute("UPDATE product_variants SET is_bundle=0 WHERE is_bundle=1 AND id NOT IN "
+                "(SELECT variant_id FROM variant_components)")
+
     # --- seed default admin (demo): username `admin` / password `admin123` ---
     salt = secrets.token_hex(16)
     admin_hash = salt + "$" + hashlib.pbkdf2_hmac("sha256", b"admin123", bytes.fromhex(salt), 100_000).hex()
