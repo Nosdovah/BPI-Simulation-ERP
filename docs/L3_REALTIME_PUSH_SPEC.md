@@ -28,7 +28,7 @@ ERP **mengirim webhook outbound** ke webstore saat terjadi perubahan stok/status
 | Header | Isi |
 |---|---|
 | `Content-Type` | `application/json` |
-| `X-Perpack-Signature` | `HMAC-SHA256(secret, raw_body)` hex |
+| `X-OSR-Signature` | `HMAC-SHA256(secret, raw_body)` hex |
 | `X-Perpack-Event-Id` | idempotency key (UUID) |
 | `X-Perpack-Timestamp` | RFC3339 UTC `Z` |
 
@@ -53,7 +53,7 @@ ERP **mengirim webhook outbound** ke webstore saat terjadi perubahan stok/status
 - **Retry:** eksponensial 1s → 2s → 4s → 8s → 16s (maks 5×), lalu drop + log.
 - **Idempotensi:** `X-Perpack-Event-Id` unik; receiver (webstore) wajib dedup.
 - **Urutan:** **tidak dijamin** — receiver harus pakai `event_id` + `timestamp` untuk reconcile (replay/last-write).
-- **Verifikasi:** receiver wajib memvalidasi `X-Perpack-Signature` atas raw body (menolak payload yang tanda tangannya tidak cocok).
+- **Verifikasi:** receiver wajib memvalidasi `X-OSR-Signature` atas raw body (menolak payload yang tanda tangannya tidak cocok).
 
 ---
 
