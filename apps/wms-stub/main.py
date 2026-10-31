@@ -547,9 +547,16 @@ def _enqueue_push(event_id: str, event: str, data: dict):
         return {"pushed": False, "status": "skipped", "note": "ERP_PUSH_WEBHOOK_URL tidak diset"}
     c = conn()
     try:
+        # A-11: nama header HARUS sama dengan yang dibaca receiver storefront
+        # (`request.headers.get("x-perpack-signature")`). Sebelumnya ERP hanya
+        # mengirim X-OSR-Signature sehingga setiap push ditolak 401
+        # "Signature tidak dikirim". X-OSR-Signature tetap dikirim untuk
+        # kompatibilitas konsumen lama.
         headers = {"Content-Type": "application/json",
+                   "X-Perpack-Signature": sig,
                    "X-OSR-Signature": sig,
                    "X-Perpack-Event-Id": event_id,
+                   "X-Perpack-Event": event,
                    "X-Perpack-Timestamp": ts}
         if ERP_PUSH_TOKEN:
             headers["Authorization"] = f"Bearer {ERP_PUSH_TOKEN}"
@@ -564,6 +571,72 @@ def _enqueue_push(event_id: str, event: str, data: dict):
     c.commit()
     c.close()
     return {"pushed": status == "sent", "status": status, "note": note, "signature": sig[:16] + "…"}
+
+
+def _push_target_info():
+    """Ringkasan target push TANPA membocorkan secret — supaya miskoneksi
+    (A-11: 'HTTP 202' tetapi event tak pernah sampai) bisa didiagnosis dari
+    luar tanpa akses dashboard Railway."""
+    from urllib.parse import urlparse
+    if not ERP_PUSH_URL:
+        return {"configured": False, "note": "ERP_PUSH_WEBHOOK_URL tidak diset"}
+    u = urlparse(ERP_PUSH_URL)
+    return {"configured": True, "scheme": u.scheme, "host": u.netloc, "path": u.path,
+            "secret_set": bool(ERP_PUSH_SECRET), "token_set": bool(ERP_PUSH_TOKEN),
+            "signature_header": "X-Perpack-Signature"}
+
+
+@app.get("/api/push-health")
+def push_health(_=Depends(require_auth)):
+    c = conn()
+    tot = c.execute("SELECT COUNT(*) c FROM push_outbox").fetchone()["c"]
+    sent = c.execute("SELECT COUNT(*) c FROM push_outbox WHERE status='sent'").fetchone()["c"]
+    failed = c.execute("SELECT COUNT(*) c FROM push_outbox WHERE status='failed'").fetchone()["c"]
+    tail = [dict(r) for r in c.execute(
+        "SELECT id, event_id, event, status, attempts, note, created_at "
+        "FROM push_outbox ORDER BY id DESC LIMIT 3").fetchall()]
+    c.close()
+    return env({"target": _push_target_info(),
+                "outbox": {"total": tot, "sent": sent, "failed": failed, "tail": tail}})
+
+
+@app.post("/api/push-outbox/replay")
+def push_outbox_replay(body: dict = None, _=Depends(require_write())):
+    """Kirim ulang payload yang SUDAH tersimpan di push_outbox memakai target
+    dan secret saat ini. Payload dikirim byte-identik (signature dihitung atas
+    body yang tersimpan), tanpa header X-Perpack-Timestamp agar guard skew di
+    receiver tidak menolak event lama. Dipakai untuk memulihkan event yang
+    dulu 'sent' ke target yang salah (A-11)."""
+    body = body if isinstance(body, dict) else {}
+    ids = body.get("ids") or []
+    if not ids:
+        return {"code": 400, "msg": {"id": "ids wajib", "en": "ids required"}, "data": None}
+    c = conn()
+    rows = c.execute(
+        f"SELECT id, event_id, event, payload FROM push_outbox WHERE id IN ({','.join('?' * len(ids))}) ORDER BY id",
+        [int(i) for i in ids]).fetchall()
+    out = []
+    for row in rows:
+        raw = row["payload"] or ""
+        sig = _sign_payload(raw)
+        try:
+            r = httpx.post(ERP_PUSH_URL, content=raw.encode(), headers={
+                "Content-Type": "application/json",
+                "X-Perpack-Signature": sig,
+                "X-OSR-Signature": sig,
+                "X-Perpack-Event-Id": row["event_id"],
+                "X-Perpack-Event": row["event"],
+            }, timeout=5.0)
+            code, body_txt = r.status_code, r.text[:200]
+        except Exception as e:
+            code, body_txt = 0, str(e)[:200]
+        ok = 200 <= code < 300
+        c.execute("UPDATE push_outbox SET status=?, attempts=attempts+1, note=? WHERE id=?",
+                  ("sent" if ok else "failed", f"replay HTTP {code}", row["id"]))
+        c.commit()
+        out.append({"id": row["id"], "event_id": row["event_id"], "http": code, "ok": ok, "body": body_txt})
+    c.close()
+    return env({"replayed": len(out), "results": out})
 
 
 @app.post("/api/webhooks/wms")
