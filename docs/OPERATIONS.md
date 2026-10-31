@@ -311,7 +311,7 @@ Hasil pada seed: 3.039 bundle → **1 oversell** + **916 understate** (phantom).
 | Gap | State sekarang | Endpoint / tindakan yang perlu dikembangkan |
 |---|---|---|
 | **G1 — Validasi enum status ketat (FM-6)** | ✅ **SUDAH**: `order.status_changed` menolak status di luar whitelist 11 nilai → HTTP 422 + `data.reason="invalid_status"` | (selesai) |
-| **G2 — Guard out-of-order event (FM-5)** | ✅ **SUDAH**: cek `timestamp` per `reference_no` di webhook → event lebih tua dari `updated_at` terakhir ditolak HTTP 409 + `data.reason="out_of_order"` | (selesai) |
+| **G2 — Guard out-of-order event (FM-5)** | ✅ **SUDAH**: cek `timestamp`/`event_timestamp` per `reference_no` → event lebih tua dari `updated_at` terakhir ditolak HTTP 409 `out_of_order`. Plus **state-machine guard**: status mundur (mis. sent→packed) ditolak HTTP 409 `status_regression` | (selesai) |
 | **G3 — Idempotency webhook** | ✅ **sebagian**: `event_id` di `webhook_events` di-dedupe (retry `stock.updated` tidak dobel) + `reference_no` di `purchase-order` idempoten. Belum: idempotensi untuk concurrent (bukan cuma sekuensial) | dedupe penuh + kunci transaksi concurrent |
 | **G4 — Oversell prevention / reservasi stok saat checkout** | ✅ **SUDAH**: `purchase-order` memotong stok atomik (cek ketersediaan + potong + buat order dalam SATU transaksi; 409 + `data.insufficient` bila stok kurang) | (selesai) |
 | **G5 — Outbound webhook push (ERP → storefront) + HMAC** | ✅ **SUDAH**: sender outbound `X-Perpack-Signature` (HMAC-SHA256) + tabel `push_outbox` + `GET /api/push-outbox` audit; aktif bila `ERP_PUSH_WEBHOOK_URL` diset | (selesai) |
