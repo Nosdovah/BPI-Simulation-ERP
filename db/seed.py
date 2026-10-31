@@ -136,6 +136,13 @@ def main():
     cur.execute("UPDATE product_variants SET is_bundle=0 WHERE is_bundle=1 AND id NOT IN "
                 "(SELECT variant_id FROM variant_components)")
 
+    # Normalisasi component_sku yang ternyata alias -> sku kanonik (cegah "komponen hilang").
+    # Contoh: komponen 'M927-GamuciGardenia-30ml-A1' adalah alias dari sku '...-C1'.
+    cur.execute("UPDATE variant_components SET component_sku = ("
+                "SELECT sku FROM product_variants pv WHERE pv.alias = variant_components.component_sku "
+                "ORDER BY pv.id LIMIT 1) "
+                "WHERE EXISTS (SELECT 1 FROM product_variants pv WHERE pv.alias = variant_components.component_sku)")
+
     # --- seed default admin (demo): username `admin` / password `admin123` ---
     salt = secrets.token_hex(16)
     admin_hash = salt + "$" + hashlib.pbkdf2_hmac("sha256", b"admin123", bytes.fromhex(salt), 100_000).hex()
