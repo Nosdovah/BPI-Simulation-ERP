@@ -478,6 +478,10 @@ def apply_stock_update(data):
 ORDER_STATUS_ALLOWED = ("paid", "process", "picking", "packing", "packed",
                         "ready_to_pickup", "sent", "completed", "cancelled", "returned", "pending")
 
+# alur maju lifecycle order (untuk deteksi regresi status)
+ORDER_FLOW = ["pending", "paid", "process", "picking", "packing", "packed",
+              "ready_to_pickup", "sent", "completed"]
+
 
 def apply_order_status(data, event_timestamp=None):
     """order.status_changed/updated -> ubah status order di DB.
@@ -502,6 +506,13 @@ def apply_order_status(data, event_timestamp=None):
         return {"applied": False, "reason": "out_of_order", "ref": ref,
                 "event_timestamp": event_timestamp, "last_updated_at": row["updated_at"],
                 "note": "event lebih tua dari status terakhir (out-of-order)"}
+    prev_status = (row["status"] or "").lower()
+    if status in ORDER_FLOW and prev_status in ORDER_FLOW:
+        if ORDER_FLOW.index(status) < ORDER_FLOW.index(prev_status):
+            c.close()
+            return {"applied": False, "reason": "status_regression", "ref": ref,
+                    "from": row["status"], "to": status,
+                    "note": f"status mundur (regresi) dari {row['status']} ke {status}"}
     new_at = event_timestamp or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     cur = cur.execute("UPDATE orders SET status=?, updated_at=? WHERE reference_no=?",
                       (status, new_at, ref))
@@ -569,7 +580,9 @@ async def webhook_wms(body: dict = None, actor=Depends(require_write())):
                     "effect": json.loads(dup["effect"]) if dup["effect"] else None,
                     "total_events": total})
 
-    ts = body.get("timestamp") or data.get("updated_at") or data.get("timestamp") or data.get("occurred_at")
+    ts = (body.get("timestamp") or body.get("event_timestamp")
+          or data.get("updated_at") or data.get("event_timestamp")
+          or data.get("timestamp") or data.get("occurred_at"))
     if event in ("stock.updated", "inventory.updated"):
         effect = apply_stock_update(data)
     elif event in ("order.status_changed", "order.status_updated", "order.updated"):
@@ -594,6 +607,8 @@ async def webhook_wms(body: dict = None, actor=Depends(require_write())):
         return JSONResponse(status_code=422, content=_err_env(422, "Status di luar whitelist enum", "Status outside whitelist", effect))
     if reason == "out_of_order":
         return JSONResponse(status_code=409, content=_err_env(409, "Event out-of-order (lebih tua)", "Out-of-order event", effect))
+    if reason == "status_regression":
+        return JSONResponse(status_code=409, content=_err_env(409, "Status regresi (mundur dari alur)", "Status regression", effect))
     if reason == "not_found":
         return JSONResponse(status_code=404, content=_err_env(40401, "Order tidak ditemukan", "Order not found", effect))
 
