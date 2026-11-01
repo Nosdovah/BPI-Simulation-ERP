@@ -143,6 +143,12 @@ def main():
                 "ORDER BY pv.id LIMIT 1) "
                 "WHERE EXISTS (SELECT 1 FROM product_variants pv WHERE pv.alias = variant_components.component_sku)")
 
+    # Buang varian dengan SKU kosong (A-15: id 4286) + bersihkan baris yatim
+    cur.execute("DELETE FROM variant_components WHERE variant_id IN (SELECT id FROM product_variants WHERE sku IS NULL OR sku='')")
+    cur.execute("DELETE FROM variant_stocks WHERE variant_id IN (SELECT id FROM product_variants WHERE sku IS NULL OR sku='')")
+    cur.execute("DELETE FROM variant_images WHERE variant_id IN (SELECT id FROM product_variants WHERE sku IS NULL OR sku='')")
+    cur.execute("DELETE FROM product_variants WHERE sku IS NULL OR sku=''")
+
     # --- seed default admin (demo): username `admin` / password `admin123` ---
     salt = secrets.token_hex(16)
     admin_hash = salt + "$" + hashlib.pbkdf2_hmac("sha256", b"admin123", bytes.fromhex(salt), 100_000).hex()
