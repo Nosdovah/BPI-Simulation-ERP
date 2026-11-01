@@ -26,7 +26,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import StarletteHTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
@@ -88,10 +88,20 @@ def require_auth(authorization: str = Header(None)):
 
 ROLES = ("admin", "sales", "warehouse")
 AUTH_ENFORCED = os.getenv("AUTH_ENFORCED", "0") == "1"   # 1 = mutasi wajib token; 0 = demo terbuka
+ERP_WEBHOOK_SECRET = os.getenv("ERP_WEBHOOK_SECRET", "")  # inbound HMAC shared secret (storefront -> ERP)
 
 
 def _auth_err(status, id_msg, en_msg):
     return {"code": status, "msg": {"id": id_msg, "en": en_msg}, "data": None}
+
+
+def _verify_hmac(raw_body: bytes, signature: str | None) -> bool:
+    """Verifikasi HMAC-SHA256 atas raw body (jalur HMAC untuk push storefront -> ERP)."""
+    if not signature or not ERP_WEBHOOK_SECRET:
+        return False
+    provided = signature[7:] if signature.startswith("sha256=") else signature
+    expected = hmac.new(ERP_WEBHOOK_SECRET.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(provided.strip(), expected)
 
 
 def _err_env(status, id_msg, en_msg, data=None):
@@ -155,15 +165,21 @@ def require_role(*roles):
 
 
 def require_write():
-    """Dependency mutasi: AUTH_ENFORCED=1 -> wajib login (role aktif apa pun); kalau 0 -> demo terbuka."""
-    def dep(authorization: str = Header(None)):
+    """Dependency mutasi: AUTH_ENFORCED=1 -> wajib login (Bearer) ATAU HMAC valid
+    (push storefront). Kalau AUTH_ENFORCED=0 -> demo terbuka (guest)."""
+    async def dep(request: Request, authorization: str = Header(None)):
         if not AUTH_ENFORCED:
             return {"role": "guest", "guest": True}
         user = current_user(authorization)
-        if not user:
-            raise HTTPException(401, detail=_auth_err(
-                401, "Autentikasi diperlukan (token tidak valid/kadaluarsa)", "Authentication required"))
-        return user
+        if user:
+            return user
+        # fallback HMAC atas raw body (X-OSR-Signature / X-Perpack-Signature)
+        raw = await request.body()
+        sig = request.headers.get("x-osr-signature") or request.headers.get("x-perpack-signature")
+        if _verify_hmac(raw, sig):
+            return {"role": "service", "hmac": True}
+        raise HTTPException(401, detail=_auth_err(
+            401, "Autentikasi diperlukan (token tidak valid/kadaluarsa)", "Authentication required"))
     return dep
 
 
