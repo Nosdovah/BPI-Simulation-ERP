@@ -105,6 +105,15 @@
   .pill-mix{background:#fef3c7;color:#b45309}
   .pill{display:inline-block;background:var(--green-50);color:var(--green);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
 
+  /* pagination */
+  .pagination{display:flex;align-items:center;gap:6px;margin-top:18px;flex-wrap:wrap}
+  .pagination .pg-info{font-size:12.5px;color:var(--mut);margin-right:10px}
+  .pagination .pg-btn{min-width:30px;height:30px;padding:0 6px;display:inline-flex;align-items:center;justify-content:center;border:1px solid var(--line);border-radius:6px;background:#fff;color:var(--ink);font-size:12.5px;font-weight:600;cursor:pointer}
+  .pagination .pg-btn:hover{border-color:var(--green);color:var(--green)}
+  .pagination .pg-btn.active{background:var(--green);border-color:var(--green);color:#fff}
+  .pagination .pg-btn:disabled{opacity:.45;cursor:default;pointer-events:none}
+  .pagination .pg-dots{color:var(--mut);padding:0 2px}
+
   /* coming soon */
   .coming{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:55vh;text-align:center;color:var(--mut)}
   .coming .big{font-size:52px;margin-bottom:8px}
@@ -249,6 +258,7 @@
         </div>
 
         <div class="pcards" id="productList"></div>
+        <div class="pagination" id="productPagination"></div>
       </section>
 
       <!-- ===== SETTINGS / RBAC ===== -->
@@ -460,34 +470,77 @@ async function loadSales(){
   }catch(e){ $('#orderTable tbody').innerHTML=`<tr><td colspan="10" style="color:var(--red)">Error: ${e.message}</td></tr>`; }
 }
 
-/* ---- products ---- */
-async function loadProducts(){
+/* ---- products (paginated, mirip Perpack) ---- */
+let PRODUCT_PAGE = 1;
+const PRODUCT_LENGTH = 25;
+let PRODUCT_TOTAL_PAGE = 1;
+let PRODUCT_COUNT = 0;
+
+function productCard(g){
+  const v=g.variants[0]||{};
+  const img=(v.images&&v.images[0]&&v.images[0].url)||g.thumbnail||'';
+  const price=(g.sell_price_min||0)>0?`Rp ${(g.sell_price_min||0).toLocaleString('id-ID')} – Rp ${(g.sell_price_max||0).toLocaleString('id-ID')}`:'-';
+  const bundle=g.variants.filter(x=>x.is_bundle).length;
+  const ns=g.variants.length-bundle;
+  const typeTag = g.variants.length===0 ? ''
+    : bundle>0 && ns===0 ? '<span class="pill">Bundling</span>'
+    : ns>0 && bundle===0 ? '<span class="pill pill-single">Single</span>'
+    : `<span class="pill pill-mix">Campuran · ${ns} single / ${bundle} bundle</span>`;
+  const totalStock=g.variants.reduce((s,x)=>s+(x.stocks||[]).reduce((a,w)=>a+(Number(w.available)||0),0),0);
+  return `<div class="pcard">
+    ${img?`<img class="thumb" src="${img}" alt="">`:'<div class="thumb"></div>'}
+    <div>
+      <div class="nm">${(g.name||'').slice(0,90)}</div>
+      ${typeTag?`<div class="tags">${typeTag}</div>`:''}
+      <div class="stok ${totalStock<=0?'zero':''}">${totalStock.toLocaleString('id-ID')} <span class="u">stok unit</span></div>
+      <div class="price">${price}</div>
+      <div class="meta">Terdapat ${g.variants.length} variasi</div>
+      <div class="meta">Tampil di 2 channel</div>
+    </div>
+  </div>`;
+}
+
+async function loadProducts(page){
+  page = page || PRODUCT_PAGE;
   try{
-    const j = await api('/v1/products/group/page?page=1&length=100');
-    $('#productList').innerHTML = j.data.map(g=>{
-      const v=g.variants[0]||{};
-      const img=(v.images&&v.images[0]&&v.images[0].url)||g.thumbnail||'';
-      const price=(g.sell_price_min||0)>0?`Rp ${(g.sell_price_min||0).toLocaleString('id-ID')} – Rp ${(g.sell_price_max||0).toLocaleString('id-ID')}`:'-';
-      const bundle=g.variants.filter(x=>x.is_bundle).length;
-      const ns=g.variants.length-bundle;
-      const typeTag = g.variants.length===0 ? ''
-        : bundle>0 && ns===0 ? '<span class="pill">Bundling</span>'
-        : ns>0 && bundle===0 ? '<span class="pill pill-single">Single</span>'
-        : `<span class="pill pill-mix">Campuran · ${ns} single / ${bundle} bundle</span>`;
-      const totalStock=g.variants.reduce((s,x)=>s+(x.stocks||[]).reduce((a,w)=>a+(Number(w.available)||0),0),0);
-      return `<div class="pcard">
-        ${img?`<img class="thumb" src="${img}" alt="">`:'<div class="thumb"></div>'}
-        <div>
-          <div class="nm">${(g.name||'').slice(0,90)}</div>
-          ${typeTag?`<div class="tags">${typeTag}</div>`:''}
-          <div class="stok ${totalStock<=0?'zero':''}">${totalStock.toLocaleString('id-ID')} <span class="u">stok unit</span></div>
-          <div class="price">${price}</div>
-          <div class="meta">Terdapat ${g.variants.length} variasi</div>
-          <div class="meta">Tampil di 2 channel</div>
-        </div>
-      </div>`;
-    }).join('');
+    const j = await api(`/v1/products/group/page?page=${page}&length=${PRODUCT_LENGTH}`);
+    const groups = j.data || [];
+    PRODUCT_PAGE = (j.metadata && j.metadata.page) || page;
+    PRODUCT_TOTAL_PAGE = (j.metadata && j.metadata.total_page) || 1;
+    PRODUCT_COUNT = (j.metadata && j.metadata.count) || groups.length;
+    $('#productList').innerHTML = groups.map(productCard).join('') || '<div style="color:var(--mut)">Tidak ada data</div>';
+    renderProductPagination();
   }catch(e){ $('#productList').innerHTML=`<div style="color:var(--red)">Error: ${e.message}</div>`; }
+}
+
+function renderProductPagination(){
+  const el = $('#productPagination'); if(!el) return;
+  const total = PRODUCT_TOTAL_PAGE, cur = PRODUCT_PAGE;
+  const start = (cur-1)*PRODUCT_LENGTH + 1;
+  const end = Math.min(cur*PRODUCT_LENGTH, PRODUCT_COUNT);
+  const pages = [];
+  const push = n => { if(!pages.includes(n)) pages.push(n); };
+  if(total <= 7){ for(let i=1;i<=total;i++) push(i); }
+  else {
+    push(1);
+    if(cur > 3) push('...');
+    for(let i=Math.max(2,cur-1); i<=Math.min(total-1,cur+1); i++) push(i);
+    if(cur < total-2) push('...');
+    push(total);
+  }
+  const items = pages.map(p=> p==='...'
+    ? '<span class="pg-dots">…</span>'
+    : `<button class="pg-btn ${p===cur?'active':''}" onclick="gotoProductPage(${p})">${p}</button>`).join('');
+  el.innerHTML = `
+    <span class="pg-info">${start} - ${end} of ${PRODUCT_COUNT} Data</span>
+    <button class="pg-btn" ${cur<=1?'disabled':''} onclick="gotoProductPage(${cur-1})">‹</button>
+    ${items}
+    <button class="pg-btn" ${cur>=total?'disabled':''} onclick="gotoProductPage(${cur+1})">›</button>`;
+}
+
+function gotoProductPage(p){
+  if(p<1 || p>PRODUCT_TOTAL_PAGE || p===PRODUCT_PAGE) return;
+  loadProducts(p);
 }
 
 /* ---- settings / RBAC ---- */
