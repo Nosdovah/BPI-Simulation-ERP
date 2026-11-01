@@ -366,24 +366,40 @@ def warehouses(_=Depends(require_auth)):
 # ============================ Master-data / product ============================
 
 def group_variants(group_id):
-    rows = q("SELECT * FROM product_variants WHERE product_group_id=? ORDER BY id", (group_id,))
-    out = []
-    for r in rows:
-        v = dict(r)
-        v.pop("product_group_id", None)
-        v["is_bundle"] = bool(v["is_bundle"])
-        v["components"] = [dict(c) for c in q(
-            "SELECT product_id, component_sku, multiplier_qty FROM variant_components WHERE variant_id=?",
-            (v["id"],))]
-        stocks = q("SELECT warehouse_id, warehouse_name, available, on_order, reserved "
-                   "FROM variant_stocks WHERE variant_id=?", (v["id"],))
-        v["stocks"] = [{"id": s["warehouse_id"], "name": s["warehouse_name"],
-                        "available": s["available"], "on_order": s["on_order"],
-                        "reserved": s["reserved"]} for s in stocks]
-        imgs = q("SELECT id, url, filename FROM variant_images WHERE variant_id=?", (v["id"],))
-        v["images"] = [{"id": im["id"], "url": im["url"], "filename": im["filename"]} for im in imgs]
-        out.append(v)
-    return out
+    c = conn()
+    try:
+        rows = c.execute("SELECT * FROM product_variants WHERE product_group_id=? ORDER BY id", (group_id,)).fetchall()
+        if not rows:
+            return []
+        ids = [r["id"] for r in rows]
+        ph = ",".join("?" * len(ids))
+        comps, stocks, imgs = {}, {}, {}
+        for x in c.execute(f"SELECT variant_id, product_id, component_sku, multiplier_qty "
+                           f"FROM variant_components WHERE variant_id IN ({ph})", ids).fetchall():
+            comps.setdefault(x["variant_id"], []).append(
+                {"product_id": x["product_id"], "component_sku": x["component_sku"],
+                 "multiplier_qty": x["multiplier_qty"]})
+        for x in c.execute(f"SELECT variant_id, warehouse_id, warehouse_name, available, on_order, reserved "
+                           f"FROM variant_stocks WHERE variant_id IN ({ph})", ids).fetchall():
+            stocks.setdefault(x["variant_id"], []).append(
+                {"id": x["warehouse_id"], "name": x["warehouse_name"], "available": x["available"],
+                 "on_order": x["on_order"], "reserved": x["reserved"]})
+        for x in c.execute(f"SELECT variant_id, id, url, filename "
+                           f"FROM variant_images WHERE variant_id IN ({ph})", ids).fetchall():
+            imgs.setdefault(x["variant_id"], []).append(
+                {"id": x["id"], "url": x["url"], "filename": x["filename"]})
+        out = []
+        for r in rows:
+            v = dict(r)
+            v.pop("product_group_id", None)
+            v["is_bundle"] = bool(v["is_bundle"])
+            v["components"] = comps.get(r["id"], [])
+            v["stocks"] = stocks.get(r["id"], [])
+            v["images"] = imgs.get(r["id"], [])
+            out.append(v)
+        return out
+    finally:
+        c.close()
 
 
 @app.get("/v1/products/group/page")
@@ -397,16 +413,22 @@ def products_group_page(page: int = 1, length: int = 100, search: str = None,
         args = [f"%{search}%", f"%{search}%"]
     count = q1(f"SELECT COUNT(*) c FROM product_groups {where}", args)["c"]
     sort = (sort or "").strip().lower()
-    if sort == "name":
-        order_by = "name COLLATE NOCASE ASC, id DESC"
-    elif sort == "stock":
-        order_by = ("(SELECT COALESCE(SUM(vs.available),0) FROM variant_stocks vs "
-                    "JOIN product_variants pv ON pv.id = vs.variant_id "
-                    "WHERE pv.product_group_id = product_groups.id) DESC, name COLLATE NOCASE ASC")
+    offset = (page - 1) * length
+    if sort == "stock":
+        # hitung total stok SEKALI (GROUP BY), bukan correlated subquery 302x
+        w = "WHERE g.name LIKE ? OR g.sku LIKE ?" if search else ""
+        sargs = ([f"%{search}%", f"%{search}%"] if search else []) + [length, offset]
+        rows = q(
+            "SELECT g.* FROM product_groups g "
+            "LEFT JOIN (SELECT pv.product_group_id, SUM(vs.available) AS total_stock "
+            "           FROM variant_stocks vs JOIN product_variants pv ON pv.id = vs.variant_id "
+            "           GROUP BY pv.product_group_id) st ON st.product_group_id = g.id "
+            f"{w} ORDER BY COALESCE(st.total_stock,0) DESC, g.name COLLATE NOCASE ASC LIMIT ? OFFSET ?",
+            sargs)
     else:
-        order_by = "id DESC"
-    rows = q(f"SELECT * FROM product_groups {where} ORDER BY {order_by} LIMIT ? OFFSET ?",
-             args + [length, (page - 1) * length])
+        order_by = "name COLLATE NOCASE ASC, id DESC" if sort == "name" else "id DESC"
+        rows = q(f"SELECT * FROM product_groups {where} ORDER BY {order_by} LIMIT ? OFFSET ?",
+                 args + [length, offset])
     data = []
     for r in rows:
         g = dict(r)
