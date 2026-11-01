@@ -565,6 +565,10 @@ def apply_order_status(data, event_timestamp=None):
     tn = data.get("tracking_no") or data.get("tracking_number") or data.get("awb")
     if tn:
         cur.execute("UPDATE orders SET awb=? WHERE reference_no=?", (tn, ref))
+    # C-07: isi sent_at otomatis saat order mencapai shipped/completed
+    if status in ("sent", "completed"):
+        cur.execute("UPDATE orders SET sent_at = COALESCE(NULLIF(sent_at,''), ?) WHERE reference_no=?",
+                    (new_at, ref))
     c.commit()
     c.close()
     return {"applied": n > 0, "reference_no": ref, "status": status,
