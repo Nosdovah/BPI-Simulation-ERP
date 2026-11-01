@@ -388,7 +388,7 @@ def group_variants(group_id):
 
 @app.get("/v1/products/group/page")
 def products_group_page(page: int = 1, length: int = 100, search: str = None,
-                        _=Depends(require_auth)):
+                        sort: str = None, _=Depends(require_auth)):
     page = max(1, page)
     length = max(1, min(length, 250))
     where, args = "", []
@@ -396,7 +396,16 @@ def products_group_page(page: int = 1, length: int = 100, search: str = None,
         where = "WHERE name LIKE ? OR sku LIKE ?"
         args = [f"%{search}%", f"%{search}%"]
     count = q1(f"SELECT COUNT(*) c FROM product_groups {where}", args)["c"]
-    rows = q(f"SELECT * FROM product_groups {where} ORDER BY id DESC LIMIT ? OFFSET ?",
+    sort = (sort or "").strip().lower()
+    if sort == "name":
+        order_by = "name COLLATE NOCASE ASC, id DESC"
+    elif sort == "stock":
+        order_by = ("(SELECT COALESCE(SUM(vs.available),0) FROM variant_stocks vs "
+                    "JOIN product_variants pv ON pv.id = vs.variant_id "
+                    "WHERE pv.product_group_id = product_groups.id) DESC, name COLLATE NOCASE ASC")
+    else:
+        order_by = "id DESC"
+    rows = q(f"SELECT * FROM product_groups {where} ORDER BY {order_by} LIMIT ? OFFSET ?",
              args + [length, (page - 1) * length])
     data = []
     for r in rows:

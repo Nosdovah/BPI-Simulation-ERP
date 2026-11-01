@@ -57,6 +57,7 @@
   .pagehead{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin:8px 0 16px}
   .pagehead h1{font-size:20px;color:var(--navy);margin:0;font-weight:800}
   .pagehead .spacer{flex:1}
+  .sortsel{padding:7px 10px;border:1px solid var(--line);border-radius:8px;background:#fff;color:var(--ink);font-size:13px;font-weight:600;cursor:pointer}
 
   /* KPI */
   .kpi-block{margin-bottom:14px}
@@ -247,8 +248,13 @@
         <div class="crumb">Home / Master Data / <b>Daftar Produk</b></div>
         <div class="pagehead">
           <h1>Daftar Produk</h1>
-          <div class="spacer"></div>
-          <button class="btn-outline" onclick="window.open('/api/export/products')">⬇ Export</button>
+                  <div class="spacer"></div>
+                  <select id="productSort" class="sortsel" onchange="resetProductSort()">
+                    <option value="">Urutkan: Terbaru</option>
+                    <option value="name">Nama (A–Z)</option>
+                    <option value="stock">Stok (terbanyak)</option>
+                  </select>
+                  <button class="btn-outline" onclick="window.open('/api/export/products')">⬇ Export</button>
           <button class="btn-primary">Tambah</button>
         </div>
 
@@ -475,6 +481,7 @@ let PRODUCT_PAGE = 1;
 const PRODUCT_LENGTH = 25;
 let PRODUCT_TOTAL_PAGE = 1;
 let PRODUCT_COUNT = 0;
+let PRODUCT_SORT = '';
 
 function productCard(g){
   const v=g.variants[0]||{};
@@ -503,7 +510,7 @@ function productCard(g){
 async function loadProducts(page){
   page = page || PRODUCT_PAGE;
   try{
-    const j = await api(`/v1/products/group/page?page=${page}&length=${PRODUCT_LENGTH}`);
+    const j = await api(`/v1/products/group/page?page=${page}&length=${PRODUCT_LENGTH}&sort=${PRODUCT_SORT}`);
     const groups = j.data || [];
     PRODUCT_PAGE = (j.metadata && j.metadata.page) || page;
     PRODUCT_TOTAL_PAGE = (j.metadata && j.metadata.total_page) || 1;
@@ -541,6 +548,13 @@ function renderProductPagination(){
 function gotoProductPage(p){
   if(p<1 || p>PRODUCT_TOTAL_PAGE || p===PRODUCT_PAGE) return;
   loadProducts(p);
+}
+
+function resetProductSort(){
+  const sel = $('#productSort');
+  PRODUCT_SORT = sel ? sel.value : '';
+  PRODUCT_PAGE = 1;
+  loadProducts(1);
 }
 
 /* ---- settings / RBAC ---- */
