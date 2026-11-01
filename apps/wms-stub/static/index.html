@@ -100,6 +100,9 @@
   .pcard .stok{font-weight:800;font-size:15px;color:var(--navy);margin-top:6px}
   .pcard .stok.zero{color:var(--red)}
   .pcard .stok .u{font-size:11px;color:var(--mut);font-weight:600}
+  .pcard .tags{margin-top:6px;display:flex;gap:5px;flex-wrap:wrap}
+  .pill-single{background:#f1f5f9;color:#64748b}
+  .pill-mix{background:#fef3c7;color:#b45309}
   .pill{display:inline-block;background:var(--green-50);color:var(--green);padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700}
 
   /* coming soon */
@@ -466,15 +469,20 @@ async function loadProducts(){
       const img=(v.images&&v.images[0]&&v.images[0].url)||g.thumbnail||'';
       const price=(g.sell_price_min||0)>0?`Rp ${(g.sell_price_min||0).toLocaleString('id-ID')} – Rp ${(g.sell_price_max||0).toLocaleString('id-ID')}`:'-';
       const bundle=g.variants.filter(x=>x.is_bundle).length;
+      const ns=g.variants.length-bundle;
+      const typeTag = bundle>0 && ns===0 ? '<span class="pill">Bundling</span>'
+        : ns>0 && bundle===0 ? '<span class="pill pill-single">Single</span>'
+        : `<span class="pill pill-mix">Campuran · ${ns} single / ${bundle} bundle</span>`;
       const totalStock=g.variants.reduce((s,x)=>s+(x.stocks||[]).reduce((a,w)=>a+(Number(w.available)||0),0),0);
       return `<div class="pcard">
         ${img?`<img class="thumb" src="${img}" alt="">`:'<div class="thumb"></div>'}
         <div>
           <div class="nm">${(g.name||'').slice(0,90)}</div>
+          <div class="tags">${typeTag}</div>
           <div class="stok ${totalStock<=0?'zero':''}">${totalStock.toLocaleString('id-ID')} <span class="u">stok unit</span></div>
           <div class="price">${price}</div>
           <div class="meta">Terdapat ${g.variants.length} variasi</div>
-          <div class="meta">Tampil di 2 channel${bundle?` · <span class="pill">${bundle} bundle</span>`:''}</div>
+          <div class="meta">Tampil di 2 channel</div>
         </div>
       </div>`;
     }).join('');
