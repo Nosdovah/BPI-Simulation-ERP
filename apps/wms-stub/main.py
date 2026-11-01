@@ -823,6 +823,55 @@ async def reconcile_orders(actor=Depends(require_write())):
                 "sla_days": SLA_DAYS, "generated_at": stamp})
 
 
+@app.post("/api/to-be/track-sync")
+async def track_sync(body: dict = None, _=Depends(require_write())):
+    """Simulasi integrasi 3PL (TO-BE): order terbuka mandek > SLA (tanpa sent_at) dipandang
+    sudah dikirim kurir, direkonsiliasi -> 'sent' + resi SIM3PL + audit shipment_simulations.
+
+    Narasi DMAIC: AS-IS tanpa 3PL tracking membuat order nyangkut di packed;
+    TO-BE menarik tracking 3PL -> status maju dan sent_at terisi. Sent_at = waktu
+    rekonsiliasi (bukan tanggal kirim nyata), ditandai resi SIM3PL + tabel audit.
+    """
+    body = body if isinstance(body, dict) else {}
+    c = conn()
+    cur = c.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS shipment_simulations ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, reference_no TEXT, "
+                "status_before TEXT, tracking_no TEXT, sent_at TEXT, created_at TEXT)")
+    cur.execute("CREATE TABLE IF NOT EXISTS order_exceptions ("
+                "reference_no TEXT PRIMARY KEY, status TEXT, order_at TEXT, age_days REAL,"
+                "reason TEXT, first_seen TEXT, last_seen TEXT)")
+    now = datetime.now(timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    rows = cur.execute(
+        f"SELECT reference_no, status, order_at FROM orders "
+        f"WHERE status IN ({','.join('?' * len(OPEN_STATUSES))}) "
+        "AND (sent_at IS NULL OR sent_at='') ORDER BY order_at", OPEN_STATUSES).fetchall()
+    resolved = []
+    for r in rows:
+        age = _age_days(r["order_at"], now)
+        if age is None or age <= SLA_DAYS:
+            continue
+        tracking = f"SIM3PL-{now.strftime('%y%m%d')}-{len(resolved) + 1:04d}"
+        cur.execute("UPDATE orders SET status='sent', awb=?, sent_at=?, updated_at=? WHERE reference_no=?",
+                    (tracking, stamp, stamp, r["reference_no"]))
+        cur.execute("INSERT INTO shipment_simulations "
+                    "(reference_no, status_before, tracking_no, sent_at, created_at) "
+                    "VALUES (?,?,?,?,?)", (r["reference_no"], r["status"], tracking, stamp, stamp))
+        cur.execute("DELETE FROM order_exceptions WHERE reference_no=?", (r["reference_no"],))
+        resolved.append({"reference_no": r["reference_no"], "status_before": r["status"],
+                         "tracking_no": tracking})
+    c.commit()
+    remaining = cur.execute(
+        f"SELECT COUNT(*) c FROM orders WHERE status IN ({','.join('?' * len(OPEN_STATUSES))}) "
+        "AND (sent_at IS NULL OR sent_at='')", OPEN_STATUSES).fetchone()["c"]
+    c.close()
+    return env({"applied": True, "simulated_3pl": True, "resolved": len(resolved),
+                "remaining_open_without_sent_at": remaining, "sla_days": SLA_DAYS,
+                "orders": resolved, "generated_at": stamp,
+                "note": "Simulasi TO-BE (bukan kiriman nyata); sent_at = waktu rekonsiliasi"})
+
+
 @app.get("/api/to-be/order-exceptions")
 def order_exceptions_list(limit: int = 50):
     """Daftar order terbuka yang mandek (jejak C-07). Read-only."""
