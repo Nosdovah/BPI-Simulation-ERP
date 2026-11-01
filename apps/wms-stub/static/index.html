@@ -470,7 +470,8 @@ async function loadProducts(){
       const price=(g.sell_price_min||0)>0?`Rp ${(g.sell_price_min||0).toLocaleString('id-ID')} – Rp ${(g.sell_price_max||0).toLocaleString('id-ID')}`:'-';
       const bundle=g.variants.filter(x=>x.is_bundle).length;
       const ns=g.variants.length-bundle;
-      const typeTag = bundle>0 && ns===0 ? '<span class="pill">Bundling</span>'
+      const typeTag = g.variants.length===0 ? ''
+        : bundle>0 && ns===0 ? '<span class="pill">Bundling</span>'
         : ns>0 && bundle===0 ? '<span class="pill pill-single">Single</span>'
         : `<span class="pill pill-mix">Campuran · ${ns} single / ${bundle} bundle</span>`;
       const totalStock=g.variants.reduce((s,x)=>s+(x.stocks||[]).reduce((a,w)=>a+(Number(w.available)||0),0),0);
@@ -478,7 +479,7 @@ async function loadProducts(){
         ${img?`<img class="thumb" src="${img}" alt="">`:'<div class="thumb"></div>'}
         <div>
           <div class="nm">${(g.name||'').slice(0,90)}</div>
-          <div class="tags">${typeTag}</div>
+          ${typeTag?`<div class="tags">${typeTag}</div>`:''}
           <div class="stok ${totalStock<=0?'zero':''}">${totalStock.toLocaleString('id-ID')} <span class="u">stok unit</span></div>
           <div class="price">${price}</div>
           <div class="meta">Terdapat ${g.variants.length} variasi</div>
