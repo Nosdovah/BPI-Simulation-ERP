@@ -33,7 +33,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
 from pydantic import BaseModel
 
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-WMS_DB = os.path.join(BASE, "db", "wms.db")
+WMS_DB = os.getenv("WMS_DB_PATH") or os.path.join(BASE, "db", "wms.db")
 
 # ---- SLA order terbuka (C-07) -------------------------------------------
 # Order dianggap mandek bila statusnya masih terbuka, `sent_at` kosong, dan

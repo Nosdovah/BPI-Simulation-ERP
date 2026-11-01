@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 
 BASE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCHEMA = os.path.join(BASE, "db", "schema.sql")
-WMS_DB = os.path.join(BASE, "db", "wms.db")
+WMS_DB = os.getenv("WMS_DB_PATH") or os.path.join(BASE, "db", "wms.db")
 SEED_FILE = os.path.join(BASE, "data", "perpack_seed.json")
 
 
