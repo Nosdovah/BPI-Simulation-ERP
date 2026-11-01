@@ -35,6 +35,35 @@ from pydantic import BaseModel
 BASE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 WMS_DB = os.path.join(BASE, "db", "wms.db")
 
+# ---- SLA order terbuka (C-07) -------------------------------------------
+# Order dianggap mandek bila statusnya masih terbuka, `sent_at` kosong, dan
+# umurnya melewati SLA. Angka ini dipakai reconcile-orders, order-exceptions,
+# dan laporan storefront — satu definisi, tidak ada dua kebenaran.
+SLA_DAYS = 2.0
+OPEN_STATUSES = ("pending", "paid", "process", "packing", "picking", "packed")
+REASON_STALLED = "STALLED_NO_SENT_AT"
+
+
+def _age_days(iso, now=None):
+    """Umur dalam hari dari timestamp ISO ERP; None bila tidak bisa di-parse."""
+    if not iso:
+        return None
+    s = str(iso).strip().replace("Z", "+00:00")
+    for fmt in ("%Y-%m-%dT%H:%M:%S%z", "%Y-%m-%dT%H:%M:%S.%f%z", "%Y-%m-%d %H:%M:%S"):
+        try:
+            dt = datetime.strptime(s, fmt)
+            break
+        except ValueError:
+            dt = None
+    if dt is None:
+        try:
+            dt = datetime.fromisoformat(s)
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return ((now or datetime.now(timezone.utc)) - dt).total_seconds() / 86400.0
+
 app = FastAPI(title="Perpack WMS (Octarine) — replica", version="1.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
@@ -738,13 +767,66 @@ async def webhook_stock_index():
 
 @app.post("/api/to-be/reconcile-orders")
 async def reconcile_orders(actor=Depends(require_write())):
-    """Penyapu order terbuka: isi sent_at utk order sent/completed yang masih kosong."""
+    """Penyapu order terbuka + jejak order mandek (C-07).
+
+    Dua pekerjaan, satu panggilan:
+      1) isi `sent_at` untuk order `sent`/`completed` yang masih kosong;
+      2) catat SETIAP order terbuka yang mandek > SLA (`SLA_DAYS`) ke tabel
+         `order_exceptions` — ref, status, umur, alasan. Sebelum ini order
+         terbuka bisa berhenti berhari-hari TANPA jejak apa pun di sistem
+         (75 order, 72 di antaranya > 2 hari, tertua 46 hari pada pass 22).
+    Exception bersifat idempoten: `first_seen` dipertahankan, `last_seen`
+    diperbarui, dan baris yang sudah tidak mandek dibersihkan tiap kali sapu.
+    """
     c = conn()
-    n = c.execute("UPDATE orders SET sent_at = COALESCE(NULLIF(sent_at,''), updated_at) "
-                  "WHERE status IN ('sent','completed') AND (sent_at IS NULL OR sent_at='')").rowcount
+    cur = c.cursor()
+    now = datetime.now(timezone.utc)
+    stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    filled = cur.execute(
+        "UPDATE orders SET sent_at = COALESCE(NULLIF(sent_at,''), updated_at) "
+        "WHERE status IN ('sent','completed') AND (sent_at IS NULL OR sent_at='')").rowcount
+
+    cur.execute("CREATE TABLE IF NOT EXISTS order_exceptions ("
+                "reference_no TEXT PRIMARY KEY, status TEXT, order_at TEXT, age_days REAL,"
+                "reason TEXT, first_seen TEXT, last_seen TEXT)")
+    rows = cur.execute(
+        "SELECT reference_no, status, order_at FROM orders "
+        f"WHERE status IN ({','.join('?' * len(OPEN_STATUSES))}) "
+        "AND (sent_at IS NULL OR sent_at='')", OPEN_STATUSES).fetchall()
+
+    marked = 0
+    for r in rows:
+        age = _age_days(r["order_at"], now)
+        if age is None or age <= SLA_DAYS:
+            continue
+        cur.execute(
+            "INSERT INTO order_exceptions (reference_no, status, order_at, age_days, reason, first_seen, last_seen) "
+            "VALUES (?,?,?,?,?,?,?) ON CONFLICT(reference_no) DO UPDATE SET "
+            "status=excluded.status, order_at=excluded.order_at, age_days=excluded.age_days, last_seen=excluded.last_seen",
+            (r["reference_no"], r["status"], r["order_at"], round(age, 1), REASON_STALLED, stamp, stamp))
+        marked += 1
+
+    cur.execute("DELETE FROM order_exceptions WHERE last_seen <> ?", (stamp,))
+    open_exc = cur.execute("SELECT COUNT(*) c FROM order_exceptions").fetchone()["c"]
     c.commit()
     c.close()
-    return env({"applied": True, "sent_at_filled": n})
+    return env({"applied": True, "sent_at_filled": filled, "open_without_sent_at": len(rows),
+                "stalled_marked": marked, "exceptions_open": open_exc,
+                "sla_days": SLA_DAYS, "generated_at": stamp})
+
+
+@app.get("/api/to-be/order-exceptions")
+def order_exceptions_list(limit: int = 50):
+    """Daftar order terbuka yang mandek (jejak C-07). Read-only."""
+    limit = max(1, min(limit, 500))
+    try:
+        rows = q("SELECT reference_no, status, order_at, age_days, reason, first_seen, last_seen "
+                 "FROM order_exceptions ORDER BY age_days DESC LIMIT ?", (limit,))
+    except Exception:
+        rows = []
+    return env(rows, {"count": len(rows), "sla_days": SLA_DAYS,
+                      "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
 
 
 # ============================ Webhook untuk storefront ============================
@@ -780,7 +862,7 @@ def _resolve_check_deduct_stock(cur, items):
     for it in items:
         sku = (it.get("sku") or "").strip()
         try:
-            qty = int(it.get("qty") or 1)
+            qty = int(it.get("qty"))
         except (TypeError, ValueError):
             qty = 0
         if not sku or qty <= 0:
@@ -839,11 +921,34 @@ async def webhook_purchase_order(body: dict = None, actor=Depends(require_write(
     if isinstance(items, dict):
         items = [items]
     items = [it for it in items if isinstance(it, dict)]
-    product_summary = ", ".join(f"{int(it.get('qty', 1))} {it.get('sku', '')}" for it in items)
-    qty = sum(int(it.get("qty", 1)) for it in items)
+    # P0 pass 22: tolak items kosong / qty < 1 / SKU kosong. Sebelum ini
+    # `int(it.get('qty', 1))` mencatat qty 0 sementara `int(it.get('qty') or 1)`
+    # memotong stok 1 -> order 0 unit tetap dibuat (ORD-QA8-NOAUTH-*).
+    if not items:
+        return JSONResponse(status_code=422, content={
+            "code": 422,
+            "msg": {"id": "items wajib diisi minimal 1 baris", "en": "items must not be empty"},
+            "data": {"applied": False, "reason": "items_empty"}})
+    bad = []
+    for it in items:
+        sku_ = str(it.get("sku") or "").strip()
+        try:
+            q_ = int(it.get("qty"))
+        except (TypeError, ValueError):
+            q_ = 0
+        if not sku_ or q_ < 1:
+            bad.append({"sku": sku_ or None, "qty": it.get("qty")})
+    if bad:
+        return JSONResponse(status_code=422, content={
+            "code": 422,
+            "msg": {"id": "qty harus bilangan bulat >= 1 dan SKU wajib",
+                    "en": "qty must be an integer >= 1 and SKU is required"},
+            "data": {"applied": False, "reason": "invalid_qty", "invalid": bad[:10]}})
+    product_summary = ", ".join(f"{int(it['qty'])} {it.get('sku', '')}" for it in items)
+    qty = sum(int(it["qty"]) for it in items)
     amount = body.get("amount")
     if amount is None:
-        amount = sum((int(it.get("qty", 1)) or 1) * (int(it.get("price") or it.get("sell_price") or 0))
+        amount = sum(int(it["qty"]) * (int(it.get("price") or it.get("sell_price") or 0))
                      for it in items)
     status = body.get("status") or "paid"
     chan_name = body.get("channel") or "WEBSTORE"
