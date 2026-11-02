@@ -143,6 +143,14 @@ def main():
                 "ORDER BY pv.id LIMIT 1) "
                 "WHERE EXISTS (SELECT 1 FROM product_variants pv WHERE pv.alias = variant_components.component_sku)")
 
+    # B-20/B-21: `component_sku` di sumber Perpack berisi SKU bundle itu sendiri pada
+    # 5.041/5.104 baris, sedangkan `product_id` selalu menunjuk komponen yang benar.
+    # Kanonikkan dari product_id supaya seed ulang tidak menghidupkan cacat yang sama.
+    cur.execute("UPDATE variant_components SET component_sku = ("
+                "SELECT sku FROM product_variants pv WHERE pv.id = variant_components.product_id) "
+                "WHERE EXISTS (SELECT 1 FROM product_variants pv WHERE pv.id = variant_components.product_id "
+                "AND pv.sku IS NOT NULL AND pv.sku != '')")
+
     # Buang varian dengan SKU kosong (A-15: id 4286) + bersihkan baris yatim
     cur.execute("DELETE FROM variant_components WHERE variant_id IN (SELECT id FROM product_variants WHERE sku IS NULL OR sku='')")
     cur.execute("DELETE FROM variant_stocks WHERE variant_id IN (SELECT id FROM product_variants WHERE sku IS NULL OR sku='')")

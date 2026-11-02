@@ -374,8 +374,10 @@ def group_variants(group_id):
         ids = [r["id"] for r in rows]
         ph = ",".join("?" * len(ids))
         comps, stocks, imgs = {}, {}, {}
-        for x in c.execute(f"SELECT variant_id, product_id, component_sku, multiplier_qty "
-                           f"FROM variant_components WHERE variant_id IN ({ph})", ids).fetchall():
+        for x in c.execute(f"SELECT vc.variant_id, vc.product_id, "
+                           f"COALESCE(pv.sku, vc.component_sku) AS component_sku, vc.multiplier_qty "
+                           f"FROM variant_components vc LEFT JOIN product_variants pv ON pv.id = vc.product_id "
+                           f"WHERE vc.variant_id IN ({ph})", ids).fetchall():
             comps.setdefault(x["variant_id"], []).append(
                 {"product_id": x["product_id"], "component_sku": x["component_sku"],
                  "multiplier_qty": x["multiplier_qty"]})
@@ -452,7 +454,9 @@ def products_list(page: int = 1, length: int = 100, _=Depends(require_auth)):
         v = dict(r)
         v["is_bundle"] = bool(v["is_bundle"])
         v["components"] = [dict(c) for c in q(
-            "SELECT product_id, component_sku, multiplier_qty FROM variant_components WHERE variant_id=?",
+            "SELECT vc.product_id, COALESCE(pv.sku, vc.component_sku) AS component_sku, vc.multiplier_qty "
+            "FROM variant_components vc LEFT JOIN product_variants pv ON pv.id = vc.product_id "
+            "WHERE vc.variant_id=?",
             (v["id"],))]
         v["stocks"] = None
         imgs = q("SELECT id, url, filename FROM variant_images WHERE variant_id=?", (v["id"],))
@@ -932,7 +936,9 @@ async def webhook_catalog(page: int = 1, length: int = 250):
         v = dict(r)
         v["is_bundle"] = bool(v["is_bundle"])
         v["components"] = [dict(c) for c in q(
-            "SELECT product_id, component_sku, multiplier_qty FROM variant_components WHERE variant_id=?",
+            "SELECT vc.product_id, COALESCE(pv.sku, vc.component_sku) AS component_sku, vc.multiplier_qty "
+            "FROM variant_components vc LEFT JOIN product_variants pv ON pv.id = vc.product_id "
+            "WHERE vc.variant_id=?",
             (v["id"],))]
         v["images"] = [im["url"] for im in q(
             "SELECT url FROM variant_images WHERE variant_id=? LIMIT 1", (v["id"],))]
@@ -943,9 +949,23 @@ async def webhook_catalog(page: int = 1, length: int = 250):
 
 
 def _resolve_check_deduct_stock(cur, items):
-    """Atomik: resolve item -> kebutuhan stok (ekspansi BOM), cek ketersediaan, lalu potong.
-    Semua via cursor `cur`; commit/rollback oleh pemanggil. Return (ok, info)."""
-    need, detail = {}, []
+    """Atomik: resolve item -> kebutuhan stok (ekspansi BOM), cek, lalu potong.
+
+    Semua via cursor `cur`; commit/rollback oleh pemanggil. Return (ok, info).
+
+    Perbaikan pass 34 (B-20/B-21) — dua hal yang dulu salah:
+
+    1. Kunci resolusi adalah VARIAN (`product_id`/variant id), bukan string
+       `component_sku`. Sumber Perpack menulis component_sku = SKU bundle itu
+       sendiri pada 5.041/5.104 baris BOM, sehingga versi lama memotong kuota
+       bundle dan TIDAK pernah memotong komponennya: stok komponen membeku,
+       kapasitas BOM menyimpang dari stok nyata.
+    2. Kuota AS-IS bundle ikut dipotong tiap penjualan (dulu hanya komponen),
+       dan karena kuota + komponen sama-sama dicek, jumlah yang lolos otomatis
+       = min(kuota, kapasitas BOM) — tidak bisa oversell.
+    """
+    need = {}      # variant_id -> qty
+    detail = []
     for it in items:
         sku = (it.get("sku") or "").strip()
         try:
@@ -954,48 +974,61 @@ def _resolve_check_deduct_stock(cur, items):
             qty = 0
         if not sku or qty <= 0:
             return False, {"error": "SKU kosong / qty invalid", "sku": sku or None}
-        v = cur.execute("SELECT id, sku, is_bundle FROM product_variants WHERE sku=? OR alias=?",
-                        (sku, sku)).fetchone()
+        v = cur.execute("SELECT id, sku, is_bundle FROM product_variants WHERE sku=? OR alias=? "
+                        "ORDER BY CASE WHEN sku=? THEN 0 ELSE 1 END, id LIMIT 1",
+                        (sku, sku, sku)).fetchone()
         if not v:
             return False, {"error": "SKU tidak ditemukan", "sku": sku}
-        if v["is_bundle"]:
-            comps = cur.execute("SELECT component_sku, multiplier_qty FROM variant_components WHERE variant_id=?",
-                                (v["id"],)).fetchall()
-            detail.append({"sku": sku, "qty": qty, "bundle": True,
-                           "components": [{"component_sku": c["component_sku"], "multiplier_qty": c["multiplier_qty"]} for c in comps]})
-            if not comps:
-                need[v["sku"]] = need.get(v["sku"], 0) + qty
-            else:
-                for c in comps:
-                    need[c["component_sku"]] = need.get(c["component_sku"], 0) + qty * c["multiplier_qty"]
-        else:
-            need[v["sku"]] = need.get(v["sku"], 0) + qty
-            detail.append({"sku": sku, "qty": qty, "bundle": False, "components": []})
+        need[v["id"]] = need.get(v["id"], 0) + qty
+        bom = _canonical_bom(cur, v["id"]) if v["is_bundle"] else []
+        if v["is_bundle"] and not bom:
+            detail.append({"sku": sku, "variant_id": v["id"], "qty": qty,
+                           "bundle": True, "components": [], "note": "bundle tanpa BOM"})
+            continue
+        for c in bom:
+            cid = c["component_id"]
+            if not cid:
+                return False, {"error": "Baris BOM tanpa product_id", "sku": v["sku"]}
+            if cid == v["id"]:      # komponen menunjuk dirinya sendiri: jangan dobel
+                continue
+            need[cid] = need.get(cid, 0) + qty * c["multiplier_qty"]
+        detail.append({"sku": sku, "variant_id": v["id"], "qty": qty,
+                       "bundle": bool(v["is_bundle"]),
+                       "components": [{"component_sku": c["component_sku"],
+                                       "multiplier_qty": c["multiplier_qty"]} for c in bom]})
 
     insufficient = []
-    for sku, qty_needed in need.items():
-        avail = cur.execute(
-            "SELECT COALESCE(SUM(vs.available),0) s FROM variant_stocks vs "
-            "JOIN product_variants pv ON pv.id=vs.variant_id WHERE pv.sku=?", (sku,)).fetchone()["s"]
+    for vid, qty_needed in need.items():
+        avail = cur.execute("SELECT COALESCE(SUM(available),0) s FROM variant_stocks "
+                            "WHERE variant_id=?", (vid,)).fetchone()["s"]
         if avail < qty_needed:
-            insufficient.append({"sku": sku, "needed": qty_needed, "available": avail})
+            row = cur.execute("SELECT sku FROM product_variants WHERE id=?", (vid,)).fetchone()
+            insufficient.append({"variant_id": vid, "sku": row["sku"] if row else None,
+                                 "needed": qty_needed, "available": avail})
     if insufficient:
         return False, {"error": "Stok tidak cukup", "insufficient": insufficient}
 
-    for sku, qty_needed in need.items():
+    for vid, qty_needed in need.items():
         rows = cur.execute(
-            "SELECT vs.variant_id, vs.warehouse_id, vs.available FROM variant_stocks vs "
-            "JOIN product_variants pv ON pv.id=vs.variant_id WHERE pv.sku=? AND vs.available>0 "
-            "ORDER BY vs.available DESC", (sku,)).fetchall()
+            "SELECT warehouse_id, available FROM variant_stocks "
+            "WHERE variant_id=? AND available>0 ORDER BY available DESC", (vid,)).fetchall()
         remaining = qty_needed
         for r in rows:
             if remaining <= 0:
                 break
             take = min(r["available"], remaining)
-            cur.execute("UPDATE variant_stocks SET available=available-? WHERE variant_id=? AND warehouse_id=?",
-                        (take, r["variant_id"], r["warehouse_id"]))
+            cur.execute("UPDATE variant_stocks SET available=available-? "
+                        "WHERE variant_id=? AND warehouse_id=?",
+                        (take, vid, r["warehouse_id"]))
             remaining -= take
-    return True, {"resolved": detail, "deducted": need}
+        if remaining > 0:   # jaga-jaga: cek & potong harus memakai angka yang sama
+            raise RuntimeError(f"stok {vid} berubah saat potong (kurang {remaining})")
+
+    deducted = {}
+    for vid, q in need.items():
+        row = cur.execute("SELECT sku FROM product_variants WHERE id=?", (vid,)).fetchone()
+        deducted[row["sku"] if row else str(vid)] = q
+    return True, {"resolved": detail, "deducted": deducted}
 
 
 @app.post("/api/webhooks/purchase-order")
@@ -1092,16 +1125,54 @@ async def webhook_purchase_order(body: dict = None, actor=Depends(require_write(
 # ============================ TO-BE — BOM virtual kitting ============================
 
 
+def _stock_by_variant(cur):
+    """Satu sumber angka stok: SUM(variant_stocks.available) per varian (by id)."""
+    return {r["variant_id"]: r["s"] for r in cur.execute(
+        "SELECT variant_id, COALESCE(SUM(available),0) s FROM variant_stocks GROUP BY variant_id")}
+
+
+def _canonical_bom(cur, variant_id):
+    """BOM kanonik sebuah varian: resolusi lewat `product_id` -> product_variants.id.
+
+    Sumber Perpack menulis `component_sku` = SKU bundle itu sendiri pada 5.041 dari
+    5.104 baris BOM (B-20/B-21). Resolusi berbasis string karena itu memotong varian
+    yang salah dan membuat label komponen di etalase menunjuk SKU bundle, bukan
+    komponen. `product_id` selalu benar, jadi ia yang dipakai sebagai kunci.
+    """
+    rows = cur.execute(
+        "SELECT vc.product_id, vc.component_sku, vc.multiplier_qty, pv.sku AS canonical_sku "
+        "FROM variant_components vc LEFT JOIN product_variants pv ON pv.id = vc.product_id "
+        "WHERE vc.variant_id=?", (variant_id,)).fetchall()
+    return [{"component_id": r["product_id"],
+             "component_sku": r["canonical_sku"] or r["component_sku"],
+             "component_sku_stored": r["component_sku"],
+             "multiplier_qty": int(r["multiplier_qty"] or 1)} for r in rows]
+
+
+def _bundle_capacity(stocks, bom):
+    """Kapasitas rakitan = min(floor(stok komponen / multiplier))."""
+    cap = None
+    for c in bom:
+        units = stocks.get(c["component_id"], 0) // (c["multiplier_qty"] or 1)
+        cap = units if cap is None else min(cap, units)
+    return cap
+
+
 def _load_bundle_bom():
     """Bulk-load stok + komponen bundle dalam 3 query (bukan per-bundle)."""
     c = conn()
     cur = c.cursor()
-    stocks = {r["variant_id"]: r["s"] for r in cur.execute(
-        "SELECT variant_id, COALESCE(SUM(available),0) s FROM variant_stocks GROUP BY variant_id")}
+    stocks = _stock_by_variant(cur)
     comps = {}
-    for r in cur.execute("SELECT variant_id, product_id, component_sku, multiplier_qty FROM variant_components"):
-        comps.setdefault(r["variant_id"], []).append(
-            (r["product_id"], r["component_sku"], r["multiplier_qty"]))
+    for r in cur.execute(
+            "SELECT vc.variant_id, vc.product_id, vc.component_sku, vc.multiplier_qty, "
+            "pv.sku AS canonical_sku FROM variant_components vc "
+            "LEFT JOIN product_variants pv ON pv.id = vc.product_id"):
+        comps.setdefault(r["variant_id"], []).append({
+            "component_id": r["product_id"],
+            "component_sku": r["canonical_sku"] or r["component_sku"],
+            "component_sku_stored": r["component_sku"],
+            "multiplier_qty": int(r["multiplier_qty"] or 1)})
     bundles = [(r["id"], r["sku"]) for r in cur.execute(
         "SELECT id, sku FROM product_variants WHERE is_bundle=1")]
     c.close()
@@ -1110,33 +1181,79 @@ def _load_bundle_bom():
 
 @app.get("/api/to-be/bundle-stock")
 def to_be_bundle_stock(sku: str = None, limit: int = 200):
-    """TO-BE: hitung ulang stok bundle dari BOM (min komponen) vs AS-IS statis (phantom)."""
+    """TO-BE: kapasitas rakitan dari BOM vs kuota AS-IS, dengan dua jaminan pass 34.
+
+    B-21 — satu jalur baca: stok komponen diambil dari tabel & agregasi yang SAMA
+    dengan /api/webhooks/stock-index (variant_stocks, SUM per varian), dan SKU
+    komponen dilaporkan kanonik dari product_variants.sku (bukan string BOM warisan).
+
+    B-20 — kuota AS-IS tidak lagi buta penjualan: `sellable` = min(kuota, kapasitas
+    BOM) adalah angka yang boleh dijual dan yang dipakai validasi order, sehingga
+    kuota statis tidak bisa lagi menjual melebihi komponen yang ada.
+    """
     stocks, comps, bundles = _load_bundle_bom()
     out = []
     for bid, bsku in bundles:
-        cs = comps.get(bid, [])
+        bom = comps.get(bid, [])
         as_is = stocks.get(bid, 0)
-        detail, to_be = [], None
-        for pid, csku, mult in cs:
-            sa = stocks.get(pid, 0)
-            detail.append({"component_sku": csku, "multiplier": mult, "stock": sa})
-            units = sa // mult if mult else sa
-            to_be = units if to_be is None else min(to_be, units)
-        to_be = to_be or 0
-        out.append({"sku": bsku, "is_bundle": True, "stock_as_is": as_is,
-                    "stock_to_be": to_be, "phantom": as_is - to_be, "components": detail})
+        cap = _bundle_capacity(stocks, bom)
+        if cap is None:            # bundle tanpa baris BOM: kuota sendiri = kapasitas
+            cap = as_is
+        detail = [{"component_id": c["component_id"],
+                   "component_sku": c["component_sku"],
+                   "multiplier": c["multiplier_qty"],
+                   "stock": stocks.get(c["component_id"], 0),
+                   "sku_mismatch": c["component_sku"] != c["component_sku_stored"]}
+                  for c in bom]
+        out.append({"sku": bsku, "is_bundle": True,
+                    "stock_as_is": as_is, "stock_to_be": cap,
+                    "sellable": min(as_is, cap),
+                    "phantom": as_is - cap,
+                    "bom_rows": len(bom), "components": detail})
     out.sort(key=lambda x: abs(x["phantom"]), reverse=True)
     if sku:
         hit = next((b for b in out if b["sku"] == sku), None)
         return env(hit if hit else {"sku": sku, "note": "bukan bundle / tidak ditemukan"})
-    oversell = sum(1 for b in out if b["phantom"] > 0)   # stok statis > kapasitas komponen
-    understate = sum(1 for b in out if b["phantom"] < 0)  # stok statis < kapasitas (rugi penjualan)
+    oversell = sum(1 for b in out if b["phantom"] > 0)      # kuota > kapasitas komponen
+    understate = sum(1 for b in out if b["phantom"] < 0)    # kuota < kapasitas (rugi penjualan)
     matched = sum(1 for b in out if b["phantom"] == 0)
+    mismatch_rows = sum(1 for b in out for c in b["components"] if c["sku_mismatch"])
     return env({
         "summary": {"total_bundles": len(out), "oversell": oversell,
-                    "understate": understate, "matched": matched},
+                    "understate": understate, "matched": matched,
+                    "bom_sku_mismatch_rows": mismatch_rows,
+                    "zero_sellable": sum(1 for b in out if b["sellable"] <= 0)},
         "bundles": out[:limit],
     })
+
+
+@app.post("/api/to-be/bom-repair")
+async def bom_repair(apply: int = 0, actor=Depends(require_write())):
+    """Rapikan `variant_components.component_sku` dari `product_id` (B-20/B-21).
+
+    Dry-run secara default (`apply=0`); `apply=1` menulis. Idempoten: baris yang
+    sudah kanonik tidak disentuh, jadi aman dijalankan tiap deploy.
+    """
+    c = conn()
+    cur = c.cursor()
+    rows = cur.execute(
+        "SELECT vc.id, vc.variant_id, vc.product_id, vc.component_sku, pv.sku AS canonical_sku "
+        "FROM variant_components vc JOIN product_variants pv ON pv.id = vc.product_id "
+        "WHERE COALESCE(vc.component_sku,'') != pv.sku").fetchall()
+    sample = [{"variant_id": r["variant_id"], "product_id": r["product_id"],
+               "stored": r["component_sku"], "canonical": r["canonical_sku"]} for r in rows[:15]]
+    fixed = 0
+    if apply:
+        for r in rows:
+            cur.execute("UPDATE variant_components SET component_sku=? WHERE id=?",
+                        (r["canonical_sku"], r["id"]))
+            fixed += 1
+        c.commit()
+    total = cur.execute("SELECT COUNT(*) c FROM variant_components").fetchone()["c"]
+    c.close()
+    return env({"mismatch": len(rows), "total_bom_rows": total, "fixed": fixed,
+                "applied": bool(apply), "sample": sample,
+                "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
 
 
 @app.get("/api/to-be/sales-summary")
